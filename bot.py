@@ -72,8 +72,8 @@ async def on_command_error(ctx: commands.Context, error):
 async def on_ready():
     print(f"✅ تم تسجيل الدخول باسم {bot.user}")
     
-    # تعيين حالة البوت
-    activity = discord.Game(name="MAX SERVER | SERVER: https://discord.gg/ba2u2s4mz | DEVOLPER: d0jw")
+    # تعيين حالة البوت الجديدة
+    activity = discord.Game(name="DEV BY : D0JW")
     await bot.change_presence(activity=activity)
 
 
