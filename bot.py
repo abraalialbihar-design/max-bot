@@ -295,18 +295,18 @@ class TicketSetupView(discord.ui.View):
 
         embed = discord.Embed(
             title=title_msg,
-            description=f"أهلاً بك {member.mention}\nيرجى شرح طلبك أو مشكلتك بالتفصيل وستم الرد عليك في أقرب وقت من قِبل الإدارة.",
-            color=discord.Color.blurple()
+            description=f"أهلاً بك {member.mention}\nيرجى شرح طلبك أو مشكلتك بالتفصيل وسيتم الرد عليك في أقرب وقت من قِبل الإدارة.",
+            color=discord.Color.from_rgb(47, 49, 54)
         )
         embed.set_footer(text=guild.name, icon_url=guild.icon.url if guild.icon else None)
 
         await ticket_channel.send(content=f"{member.mention}", embed=embed, view=TicketControlView())
 
-    @discord.ui.button(label="الدعم الفني", emoji="🛠️", style=discord.ButtonStyle.success, custom_id="support_ticket")
+    @discord.ui.button(label="الدعم الفنى", emoji="🛠️", style=discord.ButtonStyle.primary, custom_id="support_ticket")
     async def support_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._create_ticket_channel(interaction, "support", "🛠️ تذكرة الدعم الفني والاستفسارات")
 
-    @discord.ui.button(label="الابلاغ على اداري", emoji="🚨", style=discord.ButtonStyle.danger, custom_id="report_ticket")
+    @discord.ui.button(label="الابلاغ على ادارى", emoji="🚨", style=discord.ButtonStyle.danger, custom_id="report_ticket")
     async def report_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._create_ticket_channel(interaction, "report", "🚨 بلاغ ضد إداري")
 
@@ -319,16 +319,18 @@ async def ticket_setup(ctx: commands.Context):
         pass
 
     embed = discord.Embed(
-        title="🎫 مركز المساعدة والدعم الفني",
+        title="🎫 مركز الدعم والتبليغات",
         description=(
-            "مرحباً بك في سيرفرنا! إذا احتجت لأي مساعدة أو واجهتك مشكلة، يمكنك فتح تذكرة عبر الضغط على الأزرار أدناه:\n\n"
-            "🛠️ **الدعم الفني:** مخصص لاستفساراتك العامة، المساعدة، والمشاكل التقنية.\n"
-            "🚨 **الإبلاغ على إداري:** مخصص لتقديم شكوى رسمية أو بلاغ بحق أي إداري خالف القوانين."
+            "اختر نوع التذكرة المناسب، وسيقوم الفريق بمراجعة طلبك ومساعدتك بأسرع وقت.\n\n"
+            "🛠️ **الدعم الفني**\n"
+            "• للمشاكل التقنية، الاستفسارات، أو أي مساعدة تخص السيرفر.\n\n"
+            "🚨 **بلاغ على إداري**\n"
+            "• للإبلاغ عن إساءة أو مخالفة من أحد الإداريين، مع توضيح التفاصيل وإرفاق الأدلة إن وُجدت.\n\n"
+            "*يرجى اختيار النوع الصحيح وكتابة التفاصيل بوضوح.*"
         ),
-        color=discord.Color.from_rgb(88, 101, 242)
+        color=discord.Color.from_rgb(47, 49, 54)
     )
-    embed.set_thumbnail(url=ctx.guild.icon.url if ctx.guild.icon else None)
-    embed.set_footer(text=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
+    embed.set_footer(text="DEV BY : @D0JW")
 
     await ctx.send(embed=embed, view=TicketSetupView())
 
