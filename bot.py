@@ -44,7 +44,7 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="+", intents=intents, help_command=None)
 
 
-# ---------- تقييد استخدام الأوامر على من يملك Administrator فقط ----------
+# ---------- تقييد استخدام الأوامر لمن يملك Administrator فقط ----------
 @bot.check
 async def restrict_to_admin(ctx: commands.Context):
     if ctx.guild is None:
@@ -113,11 +113,9 @@ async def on_message(message: discord.Message):
 
     member = message.author
 
-    # الرد التلقائي لكلمة شعار
     if message.content.strip() == "شعار":
         await message.reply("𝐌𝐗 |", mention_author=False)
 
-    # تعديل النيك التلقائي
     if message.channel.id == NICKNAME_TRIGGER_CHANNEL_ID:
         current_name = member.display_name
         if not current_name.startswith(NICKNAME_PREFIX):
@@ -143,7 +141,7 @@ async def help_command(ctx: commands.Context):
     embed.add_field(name="+ping", value="يعرض زمن استجابة البوت", inline=False)
     embed.add_field(name="+serverinfo", value="يعرض معلومات عن السيرفر", inline=False)
     embed.add_field(name="+font <النص>", value="يزخرف النص بالنمط الفخم", inline=False)
-    embed.add_field(name="+ticket-setup", value="يرسل لوحة إنشاء التذاكر في الروم الحالي", inline=False)
+    embed.add_field(name="+ticket-setup", value="يرسل لوحة التذاكر الاحترافية في الروم الحالي", inline=False)
     embed.add_field(name="+setup-welcome <آيدي_الروم>", value="يحدد روم رسائل الترحيب", inline=False)
     embed.add_field(name="+giveaway <الدقائق> <الجائزة>", value="يبدأ مسابقة قيفاوي جديدة", inline=False)
     embed.add_field(name="+say <الرسالة>", value="يرسل رسالة عادية على لسان البوت", inline=False)
@@ -222,14 +220,12 @@ class TicketControlView(discord.ui.View):
 
     @discord.ui.button(label="إغلاق التذكرة", emoji="🔒", style=discord.ButtonStyle.danger, custom_id="close_ticket")
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # التحقق إن المستخدم أدمن أو صاحب التذكرة
         if not interaction.user.guild_permissions.administrator and not interaction.channel.name.endswith(str(interaction.user.id)[-4:]):
             await interaction.response.send_message("❌ ليس لديك صلاحية لإغلاق هذه التذكرة.", ephemeral=True)
             return
 
-        await interaction.response.send_message("🔒 جاري إغلاق التذكرة وتعديل الصلاحيات...", ephemeral=True)
+        await interaction.response.send_message("🔒 جاري إغلاق التذكرة...", ephemeral=True)
         
-        # منع الجميع من الكتابة وإبقاء الإدارة فقط أو قفل الروم
         for target, overwrite in interaction.channel.overwrites.items():
             if isinstance(target, discord.Member) and not target.bot:
                 overwrite.send_messages = False
@@ -248,7 +244,7 @@ class TicketDeleteView(discord.ui.View):
     @discord.ui.button(label="حذف التذكرة", emoji="🗑️", style=discord.ButtonStyle.secondary, custom_id="delete_ticket")
     async def delete_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ هذا الزر مخصص للأدمن فقط لحذف التذكرة.", ephemeral=True)
+            await interaction.response.send_message("❌ هذا الزر مخصص للأدمن فقط.", ephemeral=True)
             return
         
         await interaction.response.send_message("🗑️ جاري حذف الروم نهائياً خلال 3 ثوانٍ...", ephemeral=True)
@@ -263,27 +259,23 @@ class TicketSetupView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="إنشاء تذكرة", emoji="🎫", style=discord.ButtonStyle.success, custom_id="create_ticket")
-    async def create_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _create_ticket_channel(self, interaction: discord.Interaction, prefix: str, title_msg: str):
         guild = interaction.guild
         member = interaction.user
 
-        # التحقق إذا كان العضو لديه تذكرة مفتوحة مسبقاً لتجنب التكرار
-        existing_channel = discord.utils.get(guild.text_channels, name=f"ticket-{member.name.lower()[:10]}")
+        existing_channel = discord.utils.get(guild.text_channels, name=f"{prefix}-{member.name.lower()[:8]}")
         if existing_channel:
-            await interaction.response.send_message(f"❌ لديك تذكرة مفتوحة مسبقاً هنا: {existing_channel.mention}", ephemeral=True)
+            await interaction.response.send_message(f"❌ لديك تذكرة مفتوحة من هذا النوع مسبقاً هنا: {existing_channel.mention}", ephemeral=True)
             return
 
         await interaction.response.send_message("⏳ جاري إنشاء تذكرتك الخاصة...", ephemeral=True)
 
-        # الصلاحيات للروم الجديد (الأدمن + العضو صاحب التذكرة فقط)
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
             member: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
             guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True)
         }
 
-        # إعطاء صلاحيات الرؤية لكل شخص لديه Administrator تلقائياً
         for role in guild.roles:
             if role.permissions.administrator:
                 overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
@@ -296,19 +288,27 @@ class TicketSetupView(discord.ui.View):
                 category = None
 
         ticket_channel = await guild.create_text_channel(
-            name=f"ticket-{member.name[:10]}",
+            name=f"{prefix}-{member.name[:8]}",
             category=category,
             overwrites=overwrites
         )
 
         embed = discord.Embed(
-            title="🎫 تذكرة جديدة",
-            description=f"أهلاً بك {member.mention}\nيرجى كتابة مشكلتك أو طلبك بالتفصيل، وسيقوم فريق الإدارة بالرد عليك في أقرب وقت.",
-            color=discord.Color.green()
+            title=title_msg,
+            description=f"أهلاً بك {member.mention}\nيرجى شرح طلبك أو مشكلتك بالتفصيل وستم الرد عليك في أقرب وقت من قِبل الإدارة.",
+            color=discord.Color.blurple()
         )
         embed.set_footer(text=guild.name, icon_url=guild.icon.url if guild.icon else None)
 
         await ticket_channel.send(content=f"{member.mention}", embed=embed, view=TicketControlView())
+
+    @discord.ui.button(label="الدعم الفني", emoji="🛠️", style=discord.ButtonStyle.success, custom_id="support_ticket")
+    async def support_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._create_ticket_channel(interaction, "support", "🛠️ تذكرة الدعم الفني والاستفسارات")
+
+    @discord.ui.button(label="الابلاغ على اداري", emoji="🚨", style=discord.ButtonStyle.danger, custom_id="report_ticket")
+    async def report_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._create_ticket_channel(interaction, "report", "🚨 بلاغ ضد إداري")
 
 
 @bot.command(name="ticket-setup")
@@ -319,10 +319,15 @@ async def ticket_setup(ctx: commands.Context):
         pass
 
     embed = discord.Embed(
-        title="🎫 نظام تذاكر الدعم الفني",
-        description="اضغط على الزر أدناه لفتح تذكرة خاصة والتواصل مع الإدارة.",
-        color=discord.Color.blurple()
+        title="🎫 مركز المساعدة والدعم الفني",
+        description=(
+            "مرحباً بك في سيرفرنا! إذا احتجت لأي مساعدة أو واجهتك مشكلة، يمكنك فتح تذكرة عبر الضغط على الأزرار أدناه:\n\n"
+            "🛠️ **الدعم الفني:** مخصص لاستفساراتك العامة، المساعدة، والمشاكل التقنية.\n"
+            "🚨 **الإبلاغ على إداري:** مخصص لتقديم شكوى رسمية أو بلاغ بحق أي إداري خالف القوانين."
+        ),
+        color=discord.Color.from_rgb(88, 101, 242)
     )
+    embed.set_thumbnail(url=ctx.guild.icon.url if ctx.guild.icon else None)
     embed.set_footer(text=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
 
     await ctx.send(embed=embed, view=TicketSetupView())
