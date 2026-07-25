@@ -7,7 +7,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-TOKEN = os.getenv("DISCORD_TOKEN")
+# دعم قراءة التوكن من أي متغير بيئة محتمل لمنع الكراش
+TOKEN = os.getenv("DISCORD_TOKEN") or os.getenv("BOT_TOKEN")
 CONFIG_FILE = "config.json"
 
 # ==== الإعدادات الأساسية ====
@@ -15,8 +16,8 @@ DEFAULT_WELCOME_CHANNEL_ID = 1526255263462461530
 NICKNAME_TRIGGER_CHANNEL_ID = 1529710377976336434
 NICKNAME_PREFIX = "𝐌𝐗 | "
 
-# إعدادات نظام التقييم الجديدة المأخوذة من الكود الثاني
-REVIEWS_CHANNEL_ID = 1513286580456919151
+# إعدادات نظام التقييم الافتراضية
+DEFAULT_REVIEWS_CHANNEL_ID = 1513286580456919151
 STAR_EMOJI = "⭐"
 # ===========================
 
@@ -29,7 +30,8 @@ def load_config():
         except Exception:
             pass
     return {
-        "welcome_channel_id": DEFAULT_WELCOME_CHANNEL_ID
+        "welcome_channel_id": DEFAULT_WELCOME_CHANNEL_ID,
+        "reviews_channel_id": DEFAULT_REVIEWS_CHANNEL_ID
     }
 
 
@@ -146,7 +148,8 @@ async def help_command(ctx: commands.Context):
     embed.add_field(name="+serverinfo", value="يعرض معلومات عن السيرفر", inline=False)
     embed.add_field(name="+font <النص>", value="يزخرف النص بالنمط الفخم", inline=False)
     embed.add_field(name="+ticket-setup", value="يرسل لوحة التذاكر الاحترافية في الروم الحالي", inline=False)
-    embed.add_field(name="+rate <@المشتري> <المنتج>", value="طلب تقييم من المشتري (نظام التقييمات)", inline=False)
+    embed.add_field(name="+rate <@المشتري> <المنتج>", value="طلب تقييم من المشتري", inline=False)
+    embed.add_field(name="+rate-setup <آيدي_الروم>", value="يحدد روم إرسال التقييمات", inline=False)
     embed.add_field(name="+setup-welcome <آيدي_الروم>", value="يحدد روم رسائل الترحيب", inline=False)
     embed.add_field(name="+giveaway <الدقائق> <الجائزة>", value="يبدأ مسابقة قيفاوي جديدة", inline=False)
     embed.add_field(name="+say <الرسالة>", value="يرسل رسالة عادية على لسان البوت", inline=False)
@@ -213,6 +216,19 @@ async def setup_welcome(ctx: commands.Context, channel_id: int):
     config["welcome_channel_id"] = channel.id
     save_config(config)
     await ctx.reply(f"✅ تم تحديد {channel.mention} كروم رسمي لرسائل الترحيب.", mention_author=False)
+
+
+# ---------- +rate-setup ----------
+@bot.command(name="rate-setup")
+async def rate_setup(ctx: commands.Context, channel_id: int):
+    channel = ctx.guild.get_channel(channel_id)
+    if channel is None:
+        await ctx.reply("❌ ما لقيت روم بهذا الآيدي في السيرفر.", mention_author=False)
+        return
+
+    config["reviews_channel_id"] = channel.id
+    save_config(config)
+    await ctx.reply(f"✅ تم تحديد {channel.mention} كروم رسمي لتلقي التقييمات.", mention_author=False)
 
 
 # =========================================================
@@ -341,7 +357,7 @@ async def ticket_setup(ctx: commands.Context):
 
 
 # =========================================================
-# ================= نظام التقييمات: +rate و /rate ===========
+# ================= نظام التقييمات: +rate ==================
 # =========================================================
 
 class RateModal(discord.ui.Modal, title="تقييم عملية الشراء"):
@@ -377,12 +393,13 @@ class RateModal(discord.ui.Modal, title="تقييم عملية الشراء"):
         embed.set_footer(text="نظام التقييمات • MAYBE STORE")
         embed.timestamp = discord.utils.utcnow()
 
-        reviews_channel = bot.get_channel(REVIEWS_CHANNEL_ID)
+        reviews_channel_id = config.get("reviews_channel_id", DEFAULT_REVIEWS_CHANNEL_ID)
+        reviews_channel = bot.get_channel(reviews_channel_id)
         if reviews_channel:
             await reviews_channel.send(embed=embed)
             await interaction.response.send_message("✅ شكراً على تقييمك!", ephemeral=True)
         else:
-            await interaction.response.send_message("⚠️ ما قدرت ألقى روم التقييمات.", ephemeral=True)
+            await interaction.response.send_message("⚠️ ما قدرت ألقى روم التقييمات، تأكد من إعداده عبر `+rate-setup`.", ephemeral=True)
 
         self.rate_view.rate_button.disabled = True
         self.rate_view.rate_button.label = "تم التقييم مسبقاً ✅"
@@ -411,14 +428,9 @@ def build_rate_embed(buyer: discord.Member):
     )
 
 @bot.command(name="rate")
-async def rate_prefix(ctx, buyer: discord.Member, *, product: str):
+async def rate_prefix(ctx: commands.Context, buyer: discord.Member, *, product: str):
     view = RateView(seller=ctx.author, buyer=buyer, product=product)
     await ctx.send(embed=build_rate_embed(buyer), view=view)
-
-@bot.tree.command(name="rate", description="طلب تقييم من المشتري")
-async def rate(interaction: discord.Interaction, buyer: discord.Member, product: str):
-    view = RateView(seller=interaction.user, buyer=buyer, product=product)
-    await interaction.response.send_message(embed=build_rate_embed(buyer), view=view)
 
 
 # =========================================================
@@ -532,4 +544,7 @@ async def bc_online(ctx: commands.Context, *, message: str):
     await _send_broadcast(ctx, members, message, "برودكاست الأونلاين")
 
 
-bot.run(TOKEN)
+if TOKEN:
+    bot.run(TOKEN)
+else:
+    print("❌ خطأ: لم يتم العثور على التوكن في ملف .env (تأكد من وجود DISCORD_TOKEN أو BOT_TOKEN)")
