@@ -144,6 +144,7 @@ async def help_command(ctx: commands.Context):
     embed.add_field(name="+ping", value="يعرض زمن استجابة البوت", inline=False)
     embed.add_field(name="+serverinfo", value="يعرض معلومات عن السيرفر", inline=False)
     embed.add_field(name="+font <النص>", value="يزخرف النص بالنمط الفخم", inline=False)
+    embed.add_field(name="+come <@العضو>", value="إرسال تنبيه للعضو للقدوم إلى التذكرة", inline=False)
     embed.add_field(name="+pay", value="عرض طرق الدفع المعتمدة", inline=False)
     embed.add_field(name="+setpay", value="فتح قائمة لتعديل وحفظ بيانات طرق الدفع", inline=False)
     embed.add_field(name="+ticket-setup", value="يرسل لوحة التذاكر الاحترافية في الروم الحالي", inline=False)
@@ -202,6 +203,28 @@ async def font_text(ctx: commands.Context, *, text: str):
     embed.set_footer(text=f"بواسطة: {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
     
     await ctx.send(embed=embed)
+
+
+# ---------- +come ----------
+@bot.command(name="come")
+async def come_command(ctx: commands.Context, member: discord.Member):
+    channel_name = ctx.channel.name
+    channel_link = f"https://discord.com/channels/{ctx.guild.id}/{ctx.channel.id}"
+    message = (
+        f"📩 لديك رسالة جديدة في التذكرة\n"
+        f"مرحباً {member.mention}\n"
+        f"صاحب التذكرة في انتظار ردك في **{channel_name}**\n"
+        f"يرجى الرد في أقرب وقت ممكن.\n"
+        f"📌 القناة: {channel_link}\n"
+        f"👤 بواسطة: {ctx.author.name}"
+    )
+    try:
+        await member.send(message)
+        await ctx.reply(f"✅ تم إرسال التنبيه إلى {member.mention}", mention_author=False)
+    except discord.Forbidden:
+        await ctx.reply(f"❌ ما قدرت أرسل لـ {member.mention} — الخاص مقفل.", mention_author=False)
+    except discord.HTTPException as e:
+        await ctx.reply(f"❌ حدث خطأ أثناء الإرسال: {e}", mention_author=False)
 
 
 # ---------- +setup-welcome ----------
