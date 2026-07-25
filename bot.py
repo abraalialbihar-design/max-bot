@@ -181,47 +181,47 @@ async def on_message(message: discord.Message):
 
 
 # =========================================================
-# ===================== أمر CV الخاص =======================
+# ===================== أمر CV المعدل ======================
 # =========================================================
 
 @bot.command(name="cv")
 async def cv_command(ctx: commands.Context):
-    # مسح الرسالة مباشرة
+    # مسح رسالة الأمر مباشرة
     try:
         await ctx.message.delete()
     except Exception:
         pass
 
-    # التأكد من صاحب الآيدي المحدد فقط
+    # التأكد من آيدي الشخص المسموح له فقط
     if ctx.author.id != ALLOWED_USER_ID:
         return
 
     guild = ctx.guild
     channel = ctx.channel
 
-    # إعداد الصلاحيات
+    # إعداد الصلاحيات: الجميع يقرأ ولكن لا يكتب
     overwrites = {
-        guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        guild.default_role: discord.PermissionOverwrite(view_channel=True, send_messages=False),
         ctx.author: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
         guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True)
     }
 
-    # إضافة رتبة الشراء إذا كانت موجودة
+    # رتبة الشراء (تسمح بالطبيعي بالتصفح وتلغي الكتابة)
     buy_role = guild.get_role(BUY_ROLE_ID)
     if buy_role:
-        overwrites[buy_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+        overwrites[buy_role] = discord.PermissionOverwrite(view_channel=True, send_messages=False)
 
-    # إضافة رتبة الدعم الفني إذا كانت موجودة
+    # رتبة الدعم الفني (تسمح بالتصفح وتلغي الكتابة)
     support_role = guild.get_role(SUPPORT_ROLE_ID)
     if support_role:
-        overwrites[support_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+        overwrites[support_role] = discord.PermissionOverwrite(view_channel=True, send_messages=False)
 
-    # إعطاء صلاحيات لرتب الإدارة العالية
+    # الإدارة العليا تبقى قادرة على الكتابة والقراءة
     for role in guild.roles:
         if role.permissions.administrator:
             overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
 
-    # تطبيق التغييرات صامتاً
+    # تطبيق التعديلات بصمت
     try:
         await channel.edit(overwrites=overwrites)
     except Exception as e:
