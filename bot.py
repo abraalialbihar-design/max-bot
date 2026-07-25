@@ -12,9 +12,6 @@ CONFIG_FILE = "config.json"
 
 # ==== الإعدادات الأساسية ====
 DEFAULT_WELCOME_CHANNEL_ID = 1526255263462461530
-NICKNAME_TRIGGER_CHANNEL_ID = 1529710377976336434
-NICKNAME_PREFIX = "𝐌𝐗 | "
-
 DEFAULT_REVIEWS_CHANNEL_ID = 1513286580456919151
 STAR_EMOJI = "⭐"
 
@@ -121,24 +118,14 @@ async def on_member_join(member: discord.Member):
     await channel.send(content=f"🎉 {member.mention} وصل للتو!", embed=embed)
 
 
-# ---------- الرد التلقائي وتعديل اللقب ----------
+# ---------- الرد التلقائي ----------
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot or message.guild is None:
         return
 
-    member = message.author
-
     if message.content.strip() == "شعار":
         await message.reply("𝐌𝐗 |", mention_author=False)
-
-    if message.channel.id == NICKNAME_TRIGGER_CHANNEL_ID:
-        current_name = member.display_name
-        if not current_name.startswith(NICKNAME_PREFIX):
-            try:
-                await member.edit(nick=f"{NICKNAME_PREFIX}{current_name}", reason="تعديل تلقائي عند الكتابة في الروم المحدد")
-            except Exception:
-                pass
 
     await bot.process_commands(message)
 
@@ -433,10 +420,9 @@ class TicketSetupView(discord.ui.View):
 
         await ticket_channel.send(content=f"{member.mention}", embed=embed, view=TicketControlView())
 
-    # تم إصلاح تهيئة الإيموجي المخصص بشكل آمن
     @discord.ui.button(
         label="شراء منتج", 
-        emoji=discord.PartialEmoji(name="emoji_14", id=1329710377976336434), 
+        emoji="🛒", 
         style=discord.ButtonStyle.success, 
         custom_id="buy_ticket"
     )
@@ -445,7 +431,7 @@ class TicketSetupView(discord.ui.View):
 
     @discord.ui.button(
         label="الدعم الفنى", 
-        emoji=discord.PartialEmoji(name="emoji_19", id=1329710377976336434), 
+        emoji="🛠️", 
         style=discord.ButtonStyle.primary, 
         custom_id="support_ticket"
     )
