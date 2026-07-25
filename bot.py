@@ -276,23 +276,15 @@ class SetPayModal(discord.ui.Modal, title="تحديد طرق الدفع"):
 
     def __init__(self):
         super().__init__()
-        current_payments = config.get("payment_methods", {})
-        
-        # تعبئة الخانة بالحساب السابق فقط إذا كان موجوداً ومختلفاً عن كلمة "لايوجد"
-        mapping = [
-            (self.libyana, "ليبيانا"),
-            (self.madar, "مدار"),
-            (self.binance, "بايننس"),
-            (self.ltc, "LTC"),
-            (self.credit, "كريديت"),
-        ]
-        for field, key in mapping:
-            val = current_payments.get(key, "")
-            if val and val != "لايوجد":
-                field.default = val
+        # التأكد من إبقاء البوكسات فارغة دائماً لجميع الخيارات عند فتح النموذج
+        self.libyana.default = None
+        self.madar.default = None
+        self.binance.default = None
+        self.ltc.default = None
+        self.credit.default = None
 
     async def on_submit(self, interaction: discord.Interaction):
-        # إن لم يكتب المستخدم شيئاً، سينحفظ كـ "لايوجد"
+        # إن لم يكتب المستخدم شيئاً في الخانة، تحفظ قيمتها كـ "لايوجد"
         config["payment_methods"] = {
             "ليبيانا": self.libyana.value.strip() or "لايوجد",
             "مدار": self.madar.value.strip() or "لايوجد",
@@ -346,7 +338,7 @@ async def pay_command(ctx: commands.Context):
     embed.add_field(name="📱 مدار", value=f"`{payments.get('مدار', 'لايوجد')}`", inline=False)
     embed.add_field(name="🟡 بايننس", value=f"`{payments.get('بايننس', 'لايوجد')}`", inline=False)
     embed.add_field(name="🏛️ لايت كوين", value=f"`{payments.get('LTC', 'لايوجد')}`", inline=False)
-    embed.add_field(name="💳  كريديت", value=f"`{payments.get('كريديت', 'لايوجد')}`", inline=False)
+    embed.add_field(name="💳 كريديت", value=f"`{payments.get('كريديت', 'لايوجد')}`", inline=False)
 
     await ctx.send(embed=embed)
 
