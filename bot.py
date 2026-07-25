@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import math
 import asyncio
 import discord
 from discord.ext import commands
@@ -91,22 +92,24 @@ async def on_ready():
     await bot.change_presence(activity=activity)
 
 
-# ---------- دالة استخراج وتحويل المبالغ (تحويل m إلى 000000) ----------
+# ---------- دالة استخراج وتحويل المبالغ (دعم k, m, b) ----------
 def parse_amount(text: str):
     cleaned = text.strip().replace(",", "").lower()
     
-    # البحث عن نمط الأرقام مثل: 50m, 50k, 50000000
-    match = re.match(r"^(\d+(?:\.\d+)?)\s*([km])?$", cleaned)
+    # البحث عن نمط الأرقام مثل: 50m, 1k, 1b, 50000000
+    match = re.match(r"^(\d+(?:\.\d+)?)\s*([kmb])?$", cleaned)
     if not match:
         return None
 
     number, suffix = match.groups()
     val = float(number)
 
-    if suffix == "m":
-        val *= 1_000_000
-    elif suffix == "k":
+    if suffix == "k":
         val *= 1_000
+    elif suffix == "m":
+        val *= 1_000_000
+    elif suffix == "b":
+        val *= 1_000_000_000
 
     return val if val > 0 else None
 
@@ -158,24 +161,14 @@ async def on_message(message: discord.Message):
         if message.content.strip() == "شعار":
             await message.reply("𝐌𝐗 |", mention_author=False)
 
-        # فحص إن كانت الرسالة في روم الضريبة وليست أمراً
+        # فحص إن كانت الرسالة في روم الضريبة
         tax_channel_id = config.get("tax_channel_id")
         if tax_channel_id and message.channel.id == tax_channel_id and not message.content.startswith("+"):
             amount = parse_amount(message.content)
             if amount is not None:
-                tax = amount * 0.05  # ضريبة 5%
-                total = amount + tax
-
-                embed = discord.Embed(
-                    title="💰 حساب الضريبة تلقائياً (5%)",
-                    color=discord.Color.green()
-                )
-                embed.add_field(name="💵 المبلغ الأصلي", value=f"`{amount:,.0f}`", inline=False)
-                embed.add_field(name="🏷️ الضريبة (5%)", value=f"`{tax:,.0f}`", inline=False)
-                embed.add_field(name="💳 المبلغ النهائي بعد الضريبة", value=f"**`{total:,.0f}`**", inline=False)
-                embed.set_footer(text=f"تم الحساب بواسطة {bot.user.name}")
-
-                await message.reply(embed=embed, mention_author=False)
+                # معادلة ضريبة الديسكورد (الناتج مقسوماً على 0.95 ومقرب للأعلى)
+                total_with_tax = math.ceil(amount / 0.95)
+                await message.reply(f"{total_with_tax}", mention_author=False)
 
         await bot.process_commands(message)
     finally:
@@ -200,7 +193,7 @@ async def help_command(ctx: commands.Context):
     embed.add_field(name="+pay", value="عرض طرق الدفع المعتمدة", inline=False)
     embed.add_field(name="+setpay", value="فتح قائمة لتعديل وحفظ بيانات طرق الدفع", inline=False)
     embed.add_field(name="+panel", value="يرسل لوحة التذاكر الاحترافية في الروم الحالي", inline=False)
-    embed.add_field(name="+tax", value="تحديد الروم الحالية كروم لحساب الضريبة (5%) تلقائياً", inline=False)
+    embed.add_field(name="+tax", value="تحديد الروم الحالية كروم لحساب الضريبة تلقائياً", inline=False)
     embed.add_field(name="+rate <@المشتري> <المنتج>", value="طلب تقييم من المشتري", inline=False)
     embed.add_field(name="+rate-setup <آيدي_الروم>", value="يحدد روم إرسال التقييمات", inline=False)
     embed.add_field(name="+setup-welcome <آيدي_الروم>", value="يحدد روم رسائل الترحيب", inline=False)
@@ -221,8 +214,7 @@ async def tax_setup(ctx: commands.Context):
     save_config(config)
     
     await ctx.reply(
-        f"✅ تم تحديد {ctx.channel.mention} كروم رسمية لحساب الضريبة تلقائياً!\n"
-        f"💡 الآن أي شخص يكتب أي رقم (مثل `50000000` أو `50m` أو `50k`) سيقوم البوت بإضافة 5% ضريبة عليه تلقائياً.",
+        f"✅ تم تحديد {ctx.channel.mention} كروم رسمية لحساب الضريبة تلقائياً!",
         mention_author=False
     )
 
