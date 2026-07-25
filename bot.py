@@ -205,21 +205,28 @@ async def font_text(ctx: commands.Context, *, text: str):
     await ctx.send(embed=embed)
 
 
-# ---------- +come ----------
+# ---------- +come (إمبد مجدد) ----------
 @bot.command(name="come")
 async def come_command(ctx: commands.Context, member: discord.Member):
-    channel_name = ctx.channel.name
     channel_link = f"https://discord.com/channels/{ctx.guild.id}/{ctx.channel.id}"
-    message = (
-        f"📩 لديك رسالة جديدة في التذكرة\n"
-        f"مرحباً {member.mention}\n"
-        f"صاحب التذكرة في انتظار ردك في **{channel_name}**\n"
-        f"يرجى الرد في أقرب وقت ممكن.\n"
-        f"📌 القناة: {channel_link}\n"
-        f"👤 بواسطة: {ctx.author.name}"
+    
+    embed = discord.Embed(
+        title="📩 استدعاء إلى التذكرة",
+        description=(
+            f"مرحباً {member.mention} 👋\n\n"
+            f"صاحب التذكرة أو طاقم الإدارة في انتظار ردك بقناة:\n"
+            f"📌 **[{ctx.channel.name}]({channel_link})**\n\n"
+            f"يرجى الانتقال للروم والرد في أقرب وقت ممكن."
+        ),
+        color=discord.Color.gold()
     )
+    embed.add_field(name="👤 المستدعي", value=ctx.author.mention, inline=True)
+    embed.add_field(name="🏰 السيرفر", value=ctx.guild.name, inline=True)
+    embed.set_footer(text=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
+    embed.timestamp = discord.utils.utcnow()
+
     try:
-        await member.send(message)
+        await member.send(embed=embed)
         await ctx.reply(f"✅ تم إرسال التنبيه إلى {member.mention}", mention_author=False)
     except discord.Forbidden:
         await ctx.reply(f"❌ ما قدرت أرسل لـ {member.mention} — الخاص مقفل.", mention_author=False)
@@ -576,6 +583,7 @@ async def say(ctx: commands.Context, *, message: str):
     await ctx.send(message)
 
 
+# ---------- +say-embed (معدل بدون Request by user) ----------
 @bot.command(name="say-embed")
 async def say_embed(ctx: commands.Context, *, message: str):
     try:
@@ -587,7 +595,6 @@ async def say_embed(ctx: commands.Context, *, message: str):
         description=message,
         color=discord.Color.blurple()
     )
-    embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
     await ctx.send(embed=embed)
 
 
