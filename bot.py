@@ -22,7 +22,9 @@ DEFAULT_PAYMENT_METHODS = {
     "LTC": "لايوجد",
     "كريديت": "لايوجد"
 }
-# ===========================
+
+# قائمة لمنع تكرار معالجة الرسائل
+processing_messages = set()
 
 
 def load_config():
@@ -118,16 +120,24 @@ async def on_member_join(member: discord.Member):
     await channel.send(content=f"🎉 {member.mention} وصل للتو!", embed=embed)
 
 
-# ---------- الرد التلقائي ----------
+# ---------- الرد التلقائي ومنع التكرار ----------
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot or message.guild is None:
         return
 
-    if message.content.strip() == "شعار":
-        await message.reply("𝐌𝐗 |", mention_author=False)
+    # منع تكرار معالجة نفس الرسالة
+    if message.id in processing_messages:
+        return
+    processing_messages.add(message.id)
 
-    await bot.process_commands(message)
+    try:
+        if message.content.strip() == "شعار":
+            await message.reply("𝐌𝐗 |", mention_author=False)
+
+        await bot.process_commands(message)
+    finally:
+        processing_messages.discard(message.id)
 
 
 # =========================================================
@@ -147,7 +157,7 @@ async def help_command(ctx: commands.Context):
     embed.add_field(name="+come <@العضو>", value="إرسال تنبيه للعضو للقدوم إلى التذكرة", inline=False)
     embed.add_field(name="+pay", value="عرض طرق الدفع المعتمدة", inline=False)
     embed.add_field(name="+setpay", value="فتح قائمة لتعديل وحفظ بيانات طرق الدفع", inline=False)
-    embed.add_field(name="+ticket-setup", value="يرسل لوحة التذاكر الاحترافية في الروم الحالي", inline=False)
+    embed.add_field(name="+panel", value="يرسل لوحة التذاكر الاحترافية في الروم الحالي", inline=False)
     embed.add_field(name="+rate <@المشتري> <المنتج>", value="طلب تقييم من المشتري", inline=False)
     embed.add_field(name="+rate-setup <آيدي_الروم>", value="يحدد روم إرسال التقييمات", inline=False)
     embed.add_field(name="+setup-welcome <آيدي_الروم>", value="يحدد روم رسائل الترحيب", inline=False)
@@ -205,7 +215,7 @@ async def font_text(ctx: commands.Context, *, text: str):
     await ctx.send(embed=embed)
 
 
-# ---------- +come (إمبد مجدد) ----------
+# ---------- +come ----------
 @bot.command(name="come")
 async def come_command(ctx: commands.Context, member: discord.Member):
     channel_link = f"https://discord.com/channels/{ctx.guild.id}/{ctx.channel.id}"
@@ -293,11 +303,6 @@ class SetPayModal(discord.ui.Modal, title="تحديد طرق الدفع"):
 
     def __init__(self):
         super().__init__()
-        self.libyana.default = None
-        self.madar.default = None
-        self.binance.default = None
-        self.ltc.default = None
-        self.credit.default = None
 
     async def on_submit(self, interaction: discord.Interaction):
         config["payment_methods"] = {
@@ -469,8 +474,9 @@ class TicketSetupView(discord.ui.View):
         await self._create_ticket_channel(interaction, "support", "🛠️ تذكرة الدعم الفني والاستفسارات")
 
 
-@bot.command(name="ticket-setup")
-async def ticket_setup(ctx: commands.Context):
+# تم تغيير اسم الأمر هنا إلى panel
+@bot.command(name="panel")
+async def panel_command(ctx: commands.Context):
     try:
         await ctx.message.delete()
     except Exception:
@@ -583,7 +589,6 @@ async def say(ctx: commands.Context, *, message: str):
     await ctx.send(message)
 
 
-# ---------- +say-embed (معدل بدون Request by user) ----------
 @bot.command(name="say-embed")
 async def say_embed(ctx: commands.Context, *, message: str):
     try:
@@ -684,4 +689,4 @@ async def bc_online(ctx: commands.Context, *, message: str):
 if TOKEN:
     bot.run(TOKEN)
 else:
-    print("❌ خطأ: لم يتم العثور على التوكن في ملف .env (تأكد من وجود DISCORD_TOKEN أو BOT_TOKEN)")
+    print("❌ خطأ: لم يتم العثور على التوكن في ملف .env")
