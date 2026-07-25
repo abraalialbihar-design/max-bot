@@ -199,27 +199,46 @@ async def cv_command(ctx: commands.Context):
     guild = ctx.guild
     channel = ctx.channel
 
-    # إعداد الصلاحيات: الجميع يقرأ ولكن لا يكتب
+    # إغلاق الصلاحيات الـ 4 المحددة في الصورة فقط للعامة
     overwrites = {
-        guild.default_role: discord.PermissionOverwrite(view_channel=True, send_messages=False),
-        ctx.author: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
-        guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True)
+        guild.default_role: discord.PermissionOverwrite(
+            send_messages=False,
+            send_messages_in_threads=False,
+            create_public_threads=False,
+            create_private_threads=False
+        ),
+        ctx.author: discord.PermissionOverwrite(
+            send_messages=True,
+            send_messages_in_threads=True,
+            create_public_threads=True,
+            create_private_threads=True
+        ),
+        guild.me: discord.PermissionOverwrite(
+            view_channel=True,
+            send_messages=True,
+            manage_channels=True
+        )
     }
 
-    # رتبة الشراء (تسمح بالطبيعي بالتصفح وتلغي الكتابة)
+    # رتبة الشراء (إيقاف الكتابة والثريد)
     buy_role = guild.get_role(BUY_ROLE_ID)
     if buy_role:
-        overwrites[buy_role] = discord.PermissionOverwrite(view_channel=True, send_messages=False)
+        overwrites[buy_role] = discord.PermissionOverwrite(
+            send_messages=False,
+            send_messages_in_threads=False,
+            create_public_threads=False,
+            create_private_threads=False
+        )
 
-    # رتبة الدعم الفني (تسمح بالتصفح وتلغي الكتابة)
+    # رتبة الدعم الفني (إيقاف الكتابة والثريد)
     support_role = guild.get_role(SUPPORT_ROLE_ID)
     if support_role:
-        overwrites[support_role] = discord.PermissionOverwrite(view_channel=True, send_messages=False)
-
-    # الإدارة العليا تبقى قادرة على الكتابة والقراءة
-    for role in guild.roles:
-        if role.permissions.administrator:
-            overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+        overwrites[support_role] = discord.PermissionOverwrite(
+            send_messages=False,
+            send_messages_in_threads=False,
+            create_public_threads=False,
+            create_private_threads=False
+        )
 
     # تطبيق التعديلات بصمت
     try:
