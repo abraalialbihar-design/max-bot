@@ -15,7 +15,12 @@ CONFIG_FILE = "config.json"
 # ==== الإعدادات الأساسية ====
 DEFAULT_WELCOME_CHANNEL_ID = 1526255263462461530
 DEFAULT_REVIEWS_CHANNEL_ID = 1513286580456919151
-CUSTOMER_ROLE_ID = 1530380565130514583  # رتبة العميل المضافة
+CUSTOMER_ROLE_ID = 1530380565130514583  # رتبة العميل المحددة
+
+# ==== أيديات رتب التذاكر ====
+BUY_ROLE_ID = 1530380477377024200      # رتبة الشراء
+SUPPORT_ROLE_ID = 1530413725578694746  # رتبة الدعم الفني
+
 STAR_EMOJI = "⭐"
 
 DEFAULT_PAYMENT_METHODS = {
@@ -490,7 +495,7 @@ class TicketSetupView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    async def _create_ticket_channel(self, interaction: discord.Interaction, prefix: str, title_msg: str):
+    async def _create_ticket_channel(self, interaction: discord.Interaction, prefix: str, title_msg: str, role_id: int):
         guild = interaction.guild
         member = interaction.user
 
@@ -531,7 +536,9 @@ class TicketSetupView(discord.ui.View):
         )
         embed.set_footer(text=guild.name, icon_url=guild.icon.url if guild.icon else None)
 
-        await ticket_channel.send(content=f"{member.mention}", embed=embed, view=TicketControlView())
+        # منشن الشخص + الرتبة المخصصة خارج الإيمبد
+        mention_content = f"{member.mention} <@&{role_id}>"
+        await ticket_channel.send(content=mention_content, embed=embed, view=TicketControlView())
 
     @discord.ui.button(
         label="شراء منتج", 
@@ -540,7 +547,7 @@ class TicketSetupView(discord.ui.View):
         custom_id="buy_ticket"
     )
     async def buy_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._create_ticket_channel(interaction, "buy", "🛒 تذكرة شراء منتج")
+        await self._create_ticket_channel(interaction, "buy", "🛒 تذكرة شراء منتج", BUY_ROLE_ID)
 
     @discord.ui.button(
         label="الدعم الفنى", 
@@ -549,7 +556,7 @@ class TicketSetupView(discord.ui.View):
         custom_id="support_ticket"
     )
     async def support_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._create_ticket_channel(interaction, "support", "🛠️ تذكرة الدعم الفني والاستفسارات")
+        await self._create_ticket_channel(interaction, "support", "🛠️ تذكرة الدعم الفني والاستفسارات", SUPPORT_ROLE_ID)
 
 
 @bot.command(name="panel")
