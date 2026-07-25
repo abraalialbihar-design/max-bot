@@ -346,7 +346,7 @@ async def pay_command(ctx: commands.Context):
     embed.add_field(name="📱 مدار", value=f"`{payments.get('مدار', 'لايوجد')}`", inline=False)
     embed.add_field(name="🟡 بايننس", value=f"`{payments.get('بايننس', 'لايوجد')}`", inline=False)
     embed.add_field(name="🏛️ لايت كوين", value=f"`{payments.get('LTC', 'لايوجد')}`", inline=False)
-    embed.add_field(name="💳 رصيد / كريديت", value=f"`{payments.get('كريديت', 'لايوجد')}`", inline=False)
+    embed.add_field(name="💳  كريديت", value=f"`{payments.get('كريديت', 'لايوجد')}`", inline=False)
 
     await ctx.send(embed=embed)
 
