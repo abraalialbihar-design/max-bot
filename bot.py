@@ -247,25 +247,52 @@ async def rate_setup(ctx: commands.Context, channel_id: int):
 # ==================== نظام الدفع (+pay / +setpay) ==================
 # =========================================================
 
-# نافذة إدخال البيانات (Modal)
 class SetPayModal(discord.ui.Modal, title="تحديد طرق الدفع"):
-    libyana = discord.ui.TextInput(label="رقم ليبيانا", placeholder="مثال: 0928242459", required=False)
-    madar = discord.ui.TextInput(label="رقم المدار", placeholder="مثال: 0930668745", required=False)
-    binance = discord.ui.TextInput(label="بايننس", placeholder="أدخل الحساب أو اكتب لايوجد", required=False)
-    ltc = discord.ui.TextInput(label="عنوان لايتكوين (LTC)", placeholder="أدخل العنوان...", required=False)
-    credit = discord.ui.TextInput(label="رصيد / كريديت", placeholder="أدخل الرقم...", required=False)
+    libyana = discord.ui.TextInput(
+        label="رقم ليبيانا",
+        placeholder="أدخل الرقم هنا أو اتركه فارغاً",
+        required=False
+    )
+    madar = discord.ui.TextInput(
+        label="رقم المدار",
+        placeholder="أدخل الرقم هنا أو اتركه فارغاً",
+        required=False
+    )
+    binance = discord.ui.TextInput(
+        label="بايننس",
+        placeholder="أدخل العنوان هنا أو اتركه فارغاً",
+        required=False
+    )
+    ltc = discord.ui.TextInput(
+        label="عنوان لايتكوين (LTC)",
+        placeholder="أدخل العنوان هنا أو اتركه فارغاً",
+        required=False
+    )
+    credit = discord.ui.TextInput(
+        label="رصيد / كريديت",
+        placeholder="أدخل الرقم هنا أو اتركه فارغاً",
+        required=False
+    )
 
     def __init__(self):
         super().__init__()
-        # تعبئة القيم الحالية من الإعدادات كقيم افتراضية
-        current_payments = config.get("payment_methods", DEFAULT_PAYMENT_METHODS)
-        self.libyana.default = current_payments.get("ليبيانا", "لايوجد")
-        self.madar.default = current_payments.get("مدار", "لايوجد")
-        self.binance.default = current_payments.get("بايننس", "لايوجد")
-        self.ltc.default = current_payments.get("LTC", "لايوجد")
-        self.credit.default = current_payments.get("كريديت", "لايوجد")
+        current_payments = config.get("payment_methods", {})
+        
+        # تعبئة الخانة بالحساب السابق فقط إذا كان موجوداً ومختلفاً عن كلمة "لايوجد"
+        mapping = [
+            (self.libyana, "ليبيانا"),
+            (self.madar, "مدار"),
+            (self.binance, "بايننس"),
+            (self.ltc, "LTC"),
+            (self.credit, "كريديت"),
+        ]
+        for field, key in mapping:
+            val = current_payments.get(key, "")
+            if val and val != "لايوجد":
+                field.default = val
 
     async def on_submit(self, interaction: discord.Interaction):
+        # إن لم يكتب المستخدم شيئاً، سينحفظ كـ "لايوجد"
         config["payment_methods"] = {
             "ليبيانا": self.libyana.value.strip() or "لايوجد",
             "مدار": self.madar.value.strip() or "لايوجد",
