@@ -14,7 +14,10 @@ CONFIG_FILE = "config.json"
 DEFAULT_WELCOME_CHANNEL_ID = 1526255263462461530
 NICKNAME_TRIGGER_CHANNEL_ID = 1529710377976336434
 NICKNAME_PREFIX = "𝐌𝐗 | "
-LOGS_CHANNEL_ID = 0  # ضع آيدي روم السجلات هنا إذا أردت (اختياري)
+
+# إعدادات نظام التقييم الجديدة المأخوذة من الكود الثاني
+REVIEWS_CHANNEL_ID = 1513286580456919151
+STAR_EMOJI = "⭐"
 # ===========================
 
 
@@ -75,7 +78,7 @@ async def on_ready():
     await bot.change_presence(activity=activity)
 
 
-# ---------- نظام الترحيب والسجلات الأساسية ----------
+# ---------- نظام الترحيب ----------
 @bot.event
 async def on_member_join(member: discord.Member):
     channel_id = config.get("welcome_channel_id", DEFAULT_WELCOME_CHANNEL_ID)
@@ -106,16 +109,7 @@ async def on_member_join(member: discord.Member):
     await channel.send(content=f"🎉 {member.mention} وصل للتو!", embed=embed)
 
 
-# ---------- السجلات المتقدمة (Logs) للحذف والتعديل ----------
-@bot.event
-async def on_message_delete(message: discord.Message):
-    if message.author.bot or not message.guild:
-        return
-    # يمكنك توجيه السجلات لروم معين إن وجد
-    print(f"🗑️ تم حذف رسالة لـ {message.author} في روم #{message.channel.name}")
-
-
-# ---------- الرد التلقائي وتعديل اللقب وحماية السبام البسيطة ----------
+# ---------- الرد التلقائي وتعديل اللقب ----------
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot or message.guild is None:
@@ -144,21 +138,22 @@ async def on_message(message: discord.Message):
 @bot.command(name="help")
 async def help_command(ctx: commands.Context):
     embed = discord.Embed(
-        title="📖 قائمة أوامر البوت المحدثة",
-        description="البريفكس: `+`\nتشمل الأنظمة المتقدمة (تذاكر بـ Transcript، تقييم، وسجلات)",
+        title="📖 قائمة أوامر البوت",
+        description="البريفكس: `+`\nكل الأوامر الإدارية تتطلب صلاحية **Administrator**",
         color=discord.Color.blurple(),
     )
     embed.add_field(name="+ping", value="يعرض زمن استجابة البوت", inline=False)
     embed.add_field(name="+serverinfo", value="يعرض معلومات عن السيرفر", inline=False)
     embed.add_field(name="+font <النص>", value="يزخرف النص بالنمط الفخم", inline=False)
-    embed.add_field(name="+ticket-setup", value="يرسل لوحة التذاكر المتقدمة في الروم الحالي", inline=False)
+    embed.add_field(name="+ticket-setup", value="يرسل لوحة التذاكر الاحترافية في الروم الحالي", inline=False)
+    embed.add_field(name="+rate <@المشتري> <المنتج>", value="طلب تقييم من المشتري (نظام التقييمات)", inline=False)
     embed.add_field(name="+setup-welcome <آيدي_الروم>", value="يحدد روم رسائل الترحيب", inline=False)
     embed.add_field(name="+giveaway <الدقائق> <الجائزة>", value="يبدأ مسابقة قيفاوي جديدة", inline=False)
     embed.add_field(name="+say <الرسالة>", value="يرسل رسالة عادية على لسان البوت", inline=False)
     embed.add_field(name="+say-embed <الرسالة>", value="يرسل رسالة إيمبد منسقة", inline=False)
-    embed.add_field(name="+bcall <الرسالة>", value="يرسل برودكاست لكل أعضاء السيرفر", inline=False)
-    embed.add_field(name="+bc-role <@الرتبة> <الرسالة>", value="يرسل برودكاست لرتبة معينة", inline=False)
-    embed.add_field(name="+bc_online <الرسالة>", value="يرسل برودكاست للأونلاين", inline=False)
+    embed.add_field(name="+bcall <الرسالة>", value="يرسل رسالة خاصة لكل أعضاء السيرفر", inline=False)
+    embed.add_field(name="+bc-role <@الرتبة> <الرسالة>", value="يرسل رسالة خاصة لأعضاء رتبة معينة", inline=False)
+    embed.add_field(name="+bc_online <الرسالة>", value="يرسل رسالة خاصة لكل المتواجدين أونلاين", inline=False)
     embed.set_footer(text=ctx.guild.name)
     await ctx.reply(embed=embed, mention_author=False)
 
@@ -221,28 +216,30 @@ async def setup_welcome(ctx: commands.Context, channel_id: int):
 
 
 # =========================================================
-# ===================== نظام التذاكر المتطور ===============
+# ===================== نظام التذاكر ======================
 # =========================================================
 
-class TicketRatingSelect(discord.ui.Select):
-    def __init__(self):
-        options = [
-            discord.SelectOption(label="⭐⭐⭐⭐⭐ ممتاز جداً", value="5"),
-            discord.SelectOption(label="⭐⭐⭐⭐ جيد جداً", value="4"),
-            discord.SelectOption(label="⭐⭐⭐ متوسط", value="3"),
-            discord.SelectOption(label="⭐⭐ سيء", value="2"),
-            discord.SelectOption(label="⭐ سيء جداً", value="1"),
-        ]
-        super().__init__(placeholder="🌟 قيّم خدمة الدعم الفني هنا...", min_values=1, max_values=1, options=options)
-
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_message(f"❤️ شكراً لتقييمك ({self.values[0]} نجوم)، نتمنى أن نكون دائماً عند حسن ظنكم!", ephemeral=True)
-
-
-class TicketRatingView(discord.ui.View):
+class TicketControlView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
-        self.add_item(TicketRatingSelect())
+
+    @discord.ui.button(label="إغلاق التذكرة", emoji="🔒", style=discord.ButtonStyle.danger, custom_id="close_ticket")
+    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator and not interaction.channel.name.endswith(str(interaction.user.id)[-4:]):
+            await interaction.response.send_message("❌ ليس لديك صلاحية لإغلاق هذه التذكرة.", ephemeral=True)
+            return
+
+        await interaction.response.send_message("🔒 جاري إغلاق التذكرة...", ephemeral=True)
+        
+        for target, overwrite in interaction.channel.overwrites.items():
+            if isinstance(target, discord.Member) and not target.bot:
+                overwrite.send_messages = False
+                try:
+                    await interaction.channel.set_permissions(target, overwrite=overwrite)
+                except Exception:
+                    pass
+        
+        await interaction.followup.send("⚠️ تم قفل التذكرة بنجاح. يمكنك حذفها عبر الزر أدناه.", view=TicketDeleteView())
 
 
 class TicketDeleteView(discord.ui.View):
@@ -255,52 +252,12 @@ class TicketDeleteView(discord.ui.View):
             await interaction.response.send_message("❌ هذا الزر مخصص للأدمن فقط.", ephemeral=True)
             return
         
-        await interaction.response.send_message("🗑️ جاري حذف الروم وحفظ التقرير نهائياً...", ephemeral=True)
-        await asyncio.sleep(2)
+        await interaction.response.send_message("🗑️ جاري حذف الروم نهائياً خلال 3 ثوانٍ...", ephemeral=True)
+        await asyncio.sleep(3)
         try:
             await interaction.channel.delete()
         except Exception:
             pass
-
-
-class TicketControlView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="إغلاق التذكرة", emoji="🔒", style=discord.ButtonStyle.danger, custom_id="close_ticket")
-    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.user.guild_permissions.administrator and not interaction.channel.name.endswith(str(interaction.user.id)[-4:]):
-            await interaction.response.send_message("❌ ليس لديك صلاحية لإغلاق هذه التذكرة.", ephemeral=True)
-            return
-
-        await interaction.response.send_message("🔒 جاري إغلاق التذكرة وحفظ محتواها (Transcript)...", ephemeral=True)
-        
-        # حفظ محتوى التذكرة (Transcript) كنص
-        messages_history = []
-        async for msg in interaction.channel.history(limit=100, oldest_first=True):
-            messages_history.append(f"[{msg.created_at.strftime('%Y-%m-%d %H:%M')}] {msg.author.name}: {msg.content}")
-        
-        transcript_text = "\n".join(messages_history)
-        
-        for target, overwrite in interaction.channel.overwrites.items():
-            if isinstance(target, discord.Member) and not target.bot:
-                overwrite.send_messages = False
-                try:
-                    await interaction.channel.set_permissions(target, overwrite=overwrite)
-                except Exception:
-                    pass
-        
-        # إرسال رسالة الإغلاق مع خيار التقييم والحدف
-        embed = discord.Embed(
-            title="⚠️ تم قفل التذكرة",
-            description=f"محتوى المحادثة تم حفظه.\nيرجى تقييم الخدمة أدناه أو الحذف:",
-            color=discord.Color.orange()
-        )
-        if len(transcript_text) > 10:
-            embed.add_field(name="📜 ملخص السجل", value=f"```text\n{transcript_text[:900]}...\n```", inline=False)
-
-        await interaction.followup.send(embed=embed, view=TicketDeleteView())
-        await interaction.channel.send(view=TicketRatingView())
 
 
 class TicketSetupView(discord.ui.View):
@@ -311,9 +268,9 @@ class TicketSetupView(discord.ui.View):
         guild = interaction.guild
         member = interaction.user
 
-        existing_channel = discord.utils.get(guild.text_channels, name=f"{prefix}-{str(member.id)[-4:]}")
+        existing_channel = discord.utils.get(guild.text_channels, name=f"{prefix}-{member.name.lower()[:8]}")
         if existing_channel:
-            await interaction.response.send_message(f"❌ لديك تذكرة مفتوحة مسبقاً هنا: {existing_channel.mention}", ephemeral=True)
+            await interaction.response.send_message(f"❌ لديك تذكرة مفتوحة من هذا النوع مسبقاً هنا: {existing_channel.mention}", ephemeral=True)
             return
 
         await interaction.response.send_message("⏳ جاري إنشاء تذكرتك الخاصة...", ephemeral=True)
@@ -336,7 +293,7 @@ class TicketSetupView(discord.ui.View):
                 category = None
 
         ticket_channel = await guild.create_text_channel(
-            name=f"{prefix}-{str(member.id)[-4:]}",
+            name=f"{prefix}-{member.name[:8]}",
             category=category,
             overwrites=overwrites
         )
@@ -381,6 +338,87 @@ async def ticket_setup(ctx: commands.Context):
     embed.set_footer(text="DEV BY : @D0JW")
 
     await ctx.send(embed=embed, view=TicketSetupView())
+
+
+# =========================================================
+# ================= نظام التقييمات: +rate و /rate ===========
+# =========================================================
+
+class RateModal(discord.ui.Modal, title="تقييم عملية الشراء"):
+    rating = discord.ui.TextInput(label="التقييم (من 1 إلى 5)", placeholder="5", max_length=1, required=True)
+    comment = discord.ui.TextInput(label="التعليق", style=discord.TextStyle.paragraph, placeholder="اكتب رأيك بالخدمة...", required=True, max_length=300)
+
+    def __init__(self, seller: discord.Member, buyer: discord.Member, product: str, view: "RateView"):
+        super().__init__()
+        self.seller = seller
+        self.buyer = buyer
+        self.product = product
+        self.rate_view = view
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            stars_count = int(self.rating.value)
+            stars_count = max(1, min(5, stars_count))
+        except ValueError:
+            stars_count = 5
+
+        stars = STAR_EMOJI * stars_count
+
+        embed = discord.Embed(
+            description=(
+                f"تم ارسال هذا التقييم من: **({self.buyer.mention}) {self.buyer.name}**\n\n"
+                f"📦 **البائع:** ({self.seller.mention}) {self.seller.name}\n\n"
+                f"🛍️ **نوع المنتج:** {self.product}\n\n"
+                f"**التقييم:** {stars}\n\n"
+                f"💬 **التعليق:**\n{self.comment.value}"
+            ),
+            color=discord.Color.from_rgb(255, 215, 0)
+        )
+        embed.set_footer(text="نظام التقييمات • MAYBE STORE")
+        embed.timestamp = discord.utils.utcnow()
+
+        reviews_channel = bot.get_channel(REVIEWS_CHANNEL_ID)
+        if reviews_channel:
+            await reviews_channel.send(embed=embed)
+            await interaction.response.send_message("✅ شكراً على تقييمك!", ephemeral=True)
+        else:
+            await interaction.response.send_message("⚠️ ما قدرت ألقى روم التقييمات.", ephemeral=True)
+
+        self.rate_view.rate_button.disabled = True
+        self.rate_view.rate_button.label = "تم التقييم مسبقاً ✅"
+        await interaction.message.edit(view=self.rate_view)
+
+
+class RateView(discord.ui.View):
+    def __init__(self, seller: discord.Member, buyer: discord.Member, product: str):
+        super().__init__(timeout=None)
+        self.seller = seller
+        self.buyer = buyer
+        self.product = product
+
+    @discord.ui.button(label="اضغط لتقييم المنتج", style=discord.ButtonStyle.success, emoji="⭐")
+    async def rate_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.buyer.id:
+            await interaction.response.send_message("❌ هذا التقييم مخصص لشخص ثاني، مو لك.", ephemeral=True)
+            return
+        await interaction.response.send_modal(RateModal(self.seller, self.buyer, self.product, self))
+
+
+def build_rate_embed(buyer: discord.Member):
+    return discord.Embed(
+        description=f"{buyer.mention} 👋 شكراً لثقتك فينا!\nنتمنى منك تقييم عملية الشراء بالضغط على الزر تحت.",
+        color=discord.Color.from_rgb(255, 215, 0)
+    )
+
+@bot.command(name="rate")
+async def rate_prefix(ctx, buyer: discord.Member, *, product: str):
+    view = RateView(seller=ctx.author, buyer=buyer, product=product)
+    await ctx.send(embed=build_rate_embed(buyer), view=view)
+
+@bot.tree.command(name="rate", description="طلب تقييم من المشتري")
+async def rate(interaction: discord.Interaction, buyer: discord.Member, product: str):
+    view = RateView(seller=interaction.user, buyer=buyer, product=product)
+    await interaction.response.send_message(embed=build_rate_embed(buyer), view=view)
 
 
 # =========================================================
