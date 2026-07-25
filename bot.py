@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# دعم قراءة التوكن من أي متغير بيئة لمنع الكراش
 TOKEN = os.getenv("DISCORD_TOKEN") or os.getenv("BOT_TOKEN")
 CONFIG_FILE = "config.json"
 
@@ -16,17 +15,15 @@ DEFAULT_WELCOME_CHANNEL_ID = 1526255263462461530
 NICKNAME_TRIGGER_CHANNEL_ID = 1529710377976336434
 NICKNAME_PREFIX = "𝐌𝐗 | "
 
-# إعدادات نظام التقييم الافتراضية
 DEFAULT_REVIEWS_CHANNEL_ID = 1513286580456919151
 STAR_EMOJI = "⭐"
 
-# طرق الدفع الافتراضية
 DEFAULT_PAYMENT_METHODS = {
-    "كريديت": "1426552057984454817",
-    "ليبيانا": "0928242459",
-    "مدار": "0930668745",
+    "مدار": "لايوجد",
+    "ليبيانا": "لايوجد",
     "بايننس": "لايوجد",
-    "LTC": "ltc1qnm2naalmffe4avaml4hayxkxmq85h0hgzsrlhf"
+    "LTC": "لايوجد",
+    "كريديت": "لايوجد"
 }
 # ===========================
 
@@ -161,7 +158,7 @@ async def help_command(ctx: commands.Context):
     embed.add_field(name="+serverinfo", value="يعرض معلومات عن السيرفر", inline=False)
     embed.add_field(name="+font <النص>", value="يزخرف النص بالنمط الفخم", inline=False)
     embed.add_field(name="+pay", value="عرض طرق الدفع المعتمدة", inline=False)
-    embed.add_field(name="+setpay <الوسيلة> <القيمة>", value="تعديل حساب طريقة دفع معينة", inline=False)
+    embed.add_field(name="+setpay", value="فتح قائمة لتعديل وحفظ بيانات طرق الدفع", inline=False)
     embed.add_field(name="+ticket-setup", value="يرسل لوحة التذاكر الاحترافية في الروم الحالي", inline=False)
     embed.add_field(name="+rate <@المشتري> <المنتج>", value="طلب تقييم من المشتري", inline=False)
     embed.add_field(name="+rate-setup <آيدي_الروم>", value="يحدد روم إرسال التقييمات", inline=False)
@@ -247,8 +244,62 @@ async def rate_setup(ctx: commands.Context, channel_id: int):
 
 
 # =========================================================
-# ==================== نظام الدفع (+pay) ==================
+# ==================== نظام الدفع (+pay / +setpay) ==================
 # =========================================================
+
+# نافذة إدخال البيانات (Modal)
+class SetPayModal(discord.ui.Modal, title="تحديد طرق الدفع"):
+    libyana = discord.ui.TextInput(label="رقم ليبيانا", placeholder="مثال: 0928242459", required=False)
+    madar = discord.ui.TextInput(label="رقم المدار", placeholder="مثال: 0930668745", required=False)
+    binance = discord.ui.TextInput(label="بايننس", placeholder="أدخل الحساب أو اكتب لايوجد", required=False)
+    ltc = discord.ui.TextInput(label="عنوان لايتكوين (LTC)", placeholder="أدخل العنوان...", required=False)
+    credit = discord.ui.TextInput(label="رصيد / كريديت", placeholder="أدخل الرقم...", required=False)
+
+    def __init__(self):
+        super().__init__()
+        # تعبئة القيم الحالية من الإعدادات كقيم افتراضية
+        current_payments = config.get("payment_methods", DEFAULT_PAYMENT_METHODS)
+        self.libyana.default = current_payments.get("ليبيانا", "لايوجد")
+        self.madar.default = current_payments.get("مدار", "لايوجد")
+        self.binance.default = current_payments.get("بايننس", "لايوجد")
+        self.ltc.default = current_payments.get("LTC", "لايوجد")
+        self.credit.default = current_payments.get("كريديت", "لايوجد")
+
+    async def on_submit(self, interaction: discord.Interaction):
+        config["payment_methods"] = {
+            "ليبيانا": self.libyana.value.strip() or "لايوجد",
+            "مدار": self.madar.value.strip() or "لايوجد",
+            "بايننس": self.binance.value.strip() or "لايوجد",
+            "LTC": self.ltc.value.strip() or "لايوجد",
+            "كريديت": self.credit.value.strip() or "لايوجد"
+        }
+        save_config(config)
+        await interaction.response.send_message("✅ تم حفظ طرق الدفع بنجاح!", ephemeral=True)
+
+
+class SetPayView(discord.ui.View):
+    def __init__(self, author_id: int):
+        super().__init__(timeout=60)
+        self.author_id = author_id
+
+    @discord.ui.button(label="✏️ تعديل طرق الدفع", style=discord.ButtonStyle.primary)
+    async def open_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ هذا الأمر لمن استخدم +setpay فقط.", ephemeral=True)
+            return
+        await interaction.response.send_modal(SetPayModal())
+
+
+@bot.command(name="setpay")
+async def setpay_command(ctx: commands.Context):
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+
+    view = SetPayView(author_id=ctx.author.id)
+    await ctx.send("اضغط على الزر أدناه لفتح قائمة تعبئة بيانات طرق الدفع:", view=view)
+
 
 @bot.command(name="pay")
 async def pay_command(ctx: commands.Context):
@@ -264,7 +315,6 @@ async def pay_command(ctx: commands.Context):
         color=discord.Color.from_rgb(47, 49, 54)
     )
     
-    # تنسيق شكل الحقول تماماً كما في الصورة المرفقة
     embed.add_field(name="📞 ليبيانا", value=f"`{payments.get('ليبيانا', 'لايوجد')}`", inline=False)
     embed.add_field(name="📱 مدار", value=f"`{payments.get('مدار', 'لايوجد')}`", inline=False)
     embed.add_field(name="🟡 بايننس", value=f"`{payments.get('بايننس', 'لايوجد')}`", inline=False)
@@ -272,38 +322,6 @@ async def pay_command(ctx: commands.Context):
     embed.add_field(name="💳 رصيد / كريديت", value=f"`{payments.get('كريديت', 'لايوجد')}`", inline=False)
 
     await ctx.send(embed=embed)
-
-
-@bot.command(name="setpay")
-async def setpay_command(ctx: commands.Context, method: str, *, value: str):
-    try:
-        await ctx.message.delete()
-    except Exception:
-        pass
-
-    valid_methods = ["كريديت", "ليبيانا", "مدار", "بايننس", "LTC"]
-    
-    # مطابقة مرنة لأسماء وسائل الدفع
-    matched_method = None
-    for m in valid_methods:
-        if method.lower() in m.lower():
-            matched_method = m
-            break
-
-    if not matched_method:
-        await ctx.reply(
-            "⚠️ صيغة خاطئة! استخدم: `+setpay [كريديت | ليبيانا | مدار | بايننس | LTC] [القيمة]`",
-            mention_author=False
-        )
-        return
-
-    if "payment_methods" not in config:
-        config["payment_methods"] = DEFAULT_PAYMENT_METHODS
-
-    config["payment_methods"][matched_method] = value
-    save_config(config)
-
-    await ctx.reply(f"✅ تم تحديث حساب **{matched_method}** بنجاح إلى: `{value}`", mention_author=False)
 
 
 # =========================================================
