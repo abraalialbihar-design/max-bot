@@ -276,7 +276,6 @@ class SetPayModal(discord.ui.Modal, title="تحديد طرق الدفع"):
 
     def __init__(self):
         super().__init__()
-        # التأكد من إبقاء البوكسات فارغة دائماً لجميع الخيارات عند فتح النموذج
         self.libyana.default = None
         self.madar.default = None
         self.binance.default = None
@@ -284,7 +283,6 @@ class SetPayModal(discord.ui.Modal, title="تحديد طرق الدفع"):
         self.credit.default = None
 
     async def on_submit(self, interaction: discord.Interaction):
-        # إن لم يكتب المستخدم شيئاً في الخانة، تحفظ قيمتها كـ "لايوجد"
         config["payment_methods"] = {
             "ليبيانا": self.libyana.value.strip() or "لايوجد",
             "مدار": self.madar.value.strip() or "لايوجد",
@@ -428,20 +426,20 @@ class TicketSetupView(discord.ui.View):
 
         embed = discord.Embed(
             title=title_msg,
-            description=f"أهلاً بك {member.mention}\nيرجى شرح طلبك أو مشكلتك بالتفصيل وسيتم الرد عليك في أقرب وقت من قِبل الإدارة.",
+            description=f"أهلاً بك {member.mention}\nيرجى توضيح طلبك بالتفصيل وسيتم الرد عليك في أقرب وقت من قِبل الإدارة.",
             color=discord.Color.from_rgb(47, 49, 54)
         )
         embed.set_footer(text=guild.name, icon_url=guild.icon.url if guild.icon else None)
 
         await ticket_channel.send(content=f"{member.mention}", embed=embed, view=TicketControlView())
 
-    @discord.ui.button(label="الدعم الفنى", emoji="🛠️", style=discord.ButtonStyle.primary, custom_id="support_ticket")
+    @discord.ui.button(label="شراء منتج", emoji="<:emoji_14:1329710377976336434>", style=discord.ButtonStyle.success, custom_id="buy_ticket")
+    async def buy_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._create_ticket_channel(interaction, "buy", "🛒 تذكرة شراء منتج")
+
+    @discord.ui.button(label="الدعم الفنى", emoji="<:emoji_19:1329710377976336434>", style=discord.ButtonStyle.primary, custom_id="support_ticket")
     async def support_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._create_ticket_channel(interaction, "support", "🛠️ تذكرة الدعم الفني والاستفسارات")
-
-    @discord.ui.button(label="الابلاغ على ادارى", emoji="🚨", style=discord.ButtonStyle.danger, custom_id="report_ticket")
-    async def report_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._create_ticket_channel(interaction, "report", "🚨 بلاغ ضد إداري")
 
 
 @bot.command(name="ticket-setup")
@@ -452,13 +450,13 @@ async def ticket_setup(ctx: commands.Context):
         pass
 
     embed = discord.Embed(
-        title="🎫 مركز الدعم والتبليغات",
+        title="🎫 مركز الشراء والدعم الفني",
         description=(
             "اختر نوع التذكرة المناسب، وسيقوم الفريق بمراجعة طلبك ومساعدتك بأسرع وقت.\n\n"
+            "🛒 **شراء منتج**\n"
+            "• لشراء أو الاستفسار عن تفاصيل المنتجات والأسعار المتاحة.\n\n"
             "🛠️ **الدعم الفني**\n"
             "• للمشاكل التقنية، الاستفسارات، أو أي مساعدة تخص السيرفر.\n\n"
-            "🚨 **بلاغ على إداري**\n"
-            "• للإبلاغ عن إساءة أو مخالفة من أحد الإداريين، مع توضيح التفاصيل وإرفاق الأدلة إن وُجدت.\n\n"
             "*يرجى اختيار النوع الصحيح وكتابة التفاصيل بوضوح.*"
         ),
         color=discord.Color.from_rgb(47, 49, 54)
