@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import asyncio
 import discord
@@ -37,6 +38,7 @@ def load_config():
     return {
         "welcome_channel_id": DEFAULT_WELCOME_CHANNEL_ID,
         "reviews_channel_id": DEFAULT_REVIEWS_CHANNEL_ID,
+        "tax_channel_id": None,
         "payment_methods": DEFAULT_PAYMENT_METHODS
     }
 
@@ -89,6 +91,26 @@ async def on_ready():
     await bot.change_presence(activity=activity)
 
 
+# ---------- دالة استخراج وتحويل المبالغ (تحويل m إلى 000000) ----------
+def parse_amount(text: str):
+    cleaned = text.strip().replace(",", "").lower()
+    
+    # البحث عن نمط الأرقام مثل: 50m, 50k, 50000000
+    match = re.match(r"^(\d+(?:\.\d+)?)\s*([km])?$", cleaned)
+    if not match:
+        return None
+
+    number, suffix = match.groups()
+    val = float(number)
+
+    if suffix == "m":
+        val *= 1_000_000
+    elif suffix == "k":
+        val *= 1_000
+
+    return val if val > 0 else None
+
+
 # ---------- نظام الترحيب ----------
 @bot.event
 async def on_member_join(member: discord.Member):
@@ -120,7 +142,7 @@ async def on_member_join(member: discord.Member):
     await channel.send(content=f"🎉 {member.mention} وصل للتو!", embed=embed)
 
 
-# ---------- الرد التلقائي ومنع التكرار ----------
+# ---------- الرد التلقائي ومنع التكرار ومعالجة الضريبة ----------
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot or message.guild is None:
@@ -132,8 +154,28 @@ async def on_message(message: discord.Message):
     processing_messages.add(message.id)
 
     try:
+        # الرد التلقائي للشعار
         if message.content.strip() == "شعار":
             await message.reply("𝐌𝐗 |", mention_author=False)
+
+        # فحص إن كانت الرسالة في روم الضريبة وليست أمراً
+        tax_channel_id = config.get("tax_channel_id")
+        if tax_channel_id and message.channel.id == tax_channel_id and not message.content.startswith("+"):
+            amount = parse_amount(message.content)
+            if amount is not None:
+                tax = amount * 0.05  # ضريبة 5%
+                total = amount + tax
+
+                embed = discord.Embed(
+                    title="💰 حساب الضريبة تلقائياً (5%)",
+                    color=discord.Color.green()
+                )
+                embed.add_field(name="💵 المبلغ الأصلي", value=f"`{amount:,.0f}`", inline=False)
+                embed.add_field(name="🏷️ الضريبة (5%)", value=f"`{tax:,.0f}`", inline=False)
+                embed.add_field(name="💳 المبلغ النهائي بعد الضريبة", value=f"**`{total:,.0f}`**", inline=False)
+                embed.set_footer(text=f"تم الحساب بواسطة {bot.user.name}")
+
+                await message.reply(embed=embed, mention_author=False)
 
         await bot.process_commands(message)
     finally:
@@ -158,6 +200,7 @@ async def help_command(ctx: commands.Context):
     embed.add_field(name="+pay", value="عرض طرق الدفع المعتمدة", inline=False)
     embed.add_field(name="+setpay", value="فتح قائمة لتعديل وحفظ بيانات طرق الدفع", inline=False)
     embed.add_field(name="+panel", value="يرسل لوحة التذاكر الاحترافية في الروم الحالي", inline=False)
+    embed.add_field(name="+tax", value="تحديد الروم الحالية كروم لحساب الضريبة (5%) تلقائياً", inline=False)
     embed.add_field(name="+rate <@المشتري> <المنتج>", value="طلب تقييم من المشتري", inline=False)
     embed.add_field(name="+rate-setup <آيدي_الروم>", value="يحدد روم إرسال التقييمات", inline=False)
     embed.add_field(name="+setup-welcome <آيدي_الروم>", value="يحدد روم رسائل الترحيب", inline=False)
@@ -169,6 +212,19 @@ async def help_command(ctx: commands.Context):
     embed.add_field(name="+bc_online <الرسالة>", value="يرسل رسالة خاصة لكل المتواجدين أونلاين", inline=False)
     embed.set_footer(text=ctx.guild.name)
     await ctx.reply(embed=embed, mention_author=False)
+
+
+# ---------- +tax (تحديد روم الضريبة) ----------
+@bot.command(name="tax", aliases=["tax-setup"])
+async def tax_setup(ctx: commands.Context):
+    config["tax_channel_id"] = ctx.channel.id
+    save_config(config)
+    
+    await ctx.reply(
+        f"✅ تم تحديد {ctx.channel.mention} كروم رسمية لحساب الضريبة تلقائياً!\n"
+        f"💡 الآن أي شخص يكتب أي رقم (مثل `50000000` أو `50m` أو `50k`) سيقوم البوت بإضافة 5% ضريبة عليه تلقائياً.",
+        mention_author=False
+    )
 
 
 # ---------- +ping ----------
@@ -474,7 +530,6 @@ class TicketSetupView(discord.ui.View):
         await self._create_ticket_channel(interaction, "support", "🛠️ تذكرة الدعم الفني والاستفسارات")
 
 
-# تم تغيير اسم الأمر هنا إلى panel
 @bot.command(name="panel")
 async def panel_command(ctx: commands.Context):
     try:
