@@ -15,6 +15,7 @@ CONFIG_FILE = "config.json"
 # ==== الإعدادات الأساسية ====
 DEFAULT_WELCOME_CHANNEL_ID = 1526255263462461530
 DEFAULT_REVIEWS_CHANNEL_ID = 1513286580456919151
+CUSTOMER_ROLE_ID = 1530380565130514583  # رتبة العميل المضافة
 STAR_EMOJI = "⭐"
 
 DEFAULT_PAYMENT_METHODS = {
@@ -96,7 +97,6 @@ async def on_ready():
 def parse_amount(text: str):
     cleaned = text.strip().replace(",", "").lower()
     
-    # البحث عن نمط الأرقام مثل: 50m, 1k, 1b, 50000000
     match = re.match(r"^(\d+(?:\.\d+)?)\s*([kmb])?$", cleaned)
     if not match:
         return None
@@ -151,28 +151,57 @@ async def on_message(message: discord.Message):
     if message.author.bot or message.guild is None:
         return
 
-    # منع تكرار معالجة نفس الرسالة
     if message.id in processing_messages:
         return
     processing_messages.add(message.id)
 
     try:
-        # الرد التلقائي للشعار
         if message.content.strip() == "شعار":
             await message.reply("𝐌𝐗 |", mention_author=False)
 
-        # فحص إن كانت الرسالة في روم الضريبة
         tax_channel_id = config.get("tax_channel_id")
         if tax_channel_id and message.channel.id == tax_channel_id and not message.content.startswith("+"):
             amount = parse_amount(message.content)
             if amount is not None:
-                # معادلة ضريبة الديسكورد (الناتج مقسوماً على 0.95 ومقرب للأعلى)
                 total_with_tax = math.ceil(amount / 0.95)
                 await message.reply(f"{total_with_tax}", mention_author=False)
 
         await bot.process_commands(message)
     finally:
         processing_messages.discard(message.id)
+
+
+# =========================================================
+# ==================== أمر إعطاء رتبة العميل (+cus) ====================
+# =========================================================
+
+@bot.command(name="cus")
+async def give_customer_role(ctx: commands.Context, member: discord.Member):
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+
+    role = ctx.guild.get_role(CUSTOMER_ROLE_ID)
+    if role is None:
+        await ctx.send("❌ لم يتم العثور على الرتبة المحددة في السيرفر! تأكد من أن الأيدي صحيح.")
+        return
+
+    if role in member.roles:
+        await ctx.send(f"⚠️ {member.mention} يمتلك رتبة {role.mention} بالفعل!")
+        return
+
+    try:
+        await member.add_roles(role)
+        embed = discord.Embed(
+            description=f"✅ تم منح رتبة {role.mention} لـ {member.mention} بنجاح! 🎉",
+            color=discord.Color.green()
+        )
+        await ctx.send(embed=embed)
+    except discord.Forbidden:
+        await ctx.send("❌ البوت لا يملك صلاحية إعطاء هذه الرتبة! تأكد أن رتبة البوت أعلى من الرتبة المراد إعطاؤها.")
+    except Exception as e:
+        await ctx.send(f"❌ حدث خطأ أثناء إعطاء الرتبة: {e}")
 
 
 # =========================================================
@@ -186,6 +215,7 @@ async def help_command(ctx: commands.Context):
         description="البريفكس: `+`\nكل الأوامر الإدارية تتطلب صلاحية **Administrator**",
         color=discord.Color.blurple(),
     )
+    embed.add_field(name="+cus <@العضو>", value="إعطاء رتبة العميل المحددة للشخص فوراً", inline=False)
     embed.add_field(name="+ping", value="يعرض زمن استجابة البوت", inline=False)
     embed.add_field(name="+serverinfo", value="يعرض معلومات عن السيرفر", inline=False)
     embed.add_field(name="+font <النص>", value="يزخرف النص بالنمط الفخم", inline=False)
