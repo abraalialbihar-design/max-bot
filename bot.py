@@ -433,11 +433,22 @@ class TicketSetupView(discord.ui.View):
 
         await ticket_channel.send(content=f"{member.mention}", embed=embed, view=TicketControlView())
 
-    @discord.ui.button(label="شراء منتج", emoji="<:emoji_14:1329710377976336434>", style=discord.ButtonStyle.success, custom_id="buy_ticket")
+    # تم إصلاح تهيئة الإيموجي المخصص بشكل آمن
+    @discord.ui.button(
+        label="شراء منتج", 
+        emoji=discord.PartialEmoji(name="emoji_14", id=1329710377976336434), 
+        style=discord.ButtonStyle.success, 
+        custom_id="buy_ticket"
+    )
     async def buy_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._create_ticket_channel(interaction, "buy", "🛒 تذكرة شراء منتج")
 
-    @discord.ui.button(label="الدعم الفنى", emoji="<:emoji_19:1329710377976336434>", style=discord.ButtonStyle.primary, custom_id="support_ticket")
+    @discord.ui.button(
+        label="الدعم الفنى", 
+        emoji=discord.PartialEmoji(name="emoji_19", id=1329710377976336434), 
+        style=discord.ButtonStyle.primary, 
+        custom_id="support_ticket"
+    )
     async def support_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._create_ticket_channel(interaction, "support", "🛠️ تذكرة الدعم الفني والاستفسارات")
 
