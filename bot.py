@@ -5,7 +5,7 @@ import math
 import random
 import asyncio
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -50,6 +50,8 @@ def load_config():
         "welcome_channel_id": DEFAULT_WELCOME_CHANNEL_ID,
         "reviews_channel_id": DEFAULT_REVIEWS_CHANNEL_ID,
         "tax_channel_id": None,
+        "buy_category_id": None,
+        "support_category_id": None,
         "payment_methods": DEFAULT_PAYMENT_METHODS
     }
 
@@ -101,6 +103,10 @@ async def on_ready():
     print(f"✅ تم تسجيل الدخول بنجاح باسم: {bot.user}")
     activity = discord.Game(name="DEV BY : D0JW")
     await bot.change_presence(activity=activity)
+    
+    # بدء مهمة الفحص التلقائي للتذاكر الخاملة
+    if not check_inactive_tickets.is_running():
+        check_inactive_tickets.start()
 
 
 # ---------- دالة استخراج وتحويل المبالغ (دعم k, m, b) ----------
@@ -121,6 +127,24 @@ def parse_amount(text: str):
         val *= 1_000_000_000
 
     return val if val > 0 else None
+
+
+def parse_time(time_str: str) -> int:
+    unit = time_str[-1].lower()
+    try:
+        val = int(time_str[:-1])
+    except ValueError:
+        return None
+
+    if unit == "s":
+        return val
+    elif unit == "m":
+        return val * 60
+    elif unit == "h":
+        return val * 3600
+    elif unit == "d":
+        return val * 86400
+    return None
 
 
 # ---------- نظام الترحيب ----------
@@ -177,6 +201,107 @@ async def on_message(message: discord.Message):
         await bot.process_commands(message)
     finally:
         processing_messages.discard(message.id)
+
+
+# =========================================================
+# ================= ⚙️ إعدادات الكاتيجوري (+bnm / +dfg) =======
+# =========================================================
+
+@bot.command(name="bnm")
+async def set_buy_category(ctx: commands.Context, category_id: int):
+    category = ctx.guild.get_channel(category_id)
+    if category is None or not isinstance(category, discord.CategoryChannel):
+        await ctx.reply("❌ **لم يتم العثور على الكاتيجوري (Category) المحددة.**", mention_author=False)
+        return
+
+    config["buy_category_id"] = category.id
+    save_config(config)
+    await ctx.reply(f"✅ **تم اعتماد الكاتيجوري `{category.name}` لتذاكر الشراء.**", mention_author=False)
+
+
+@bot.command(name="dfg")
+async def set_support_category(ctx: commands.Context, category_id: int):
+    category = ctx.guild.get_channel(category_id)
+    if category is None or not isinstance(category, discord.CategoryChannel):
+        await ctx.reply("❌ **لم يتم العثور على الكاتيجوري (Category) المحددة.**", mention_author=False)
+        return
+
+    config["support_category_id"] = category.id
+    save_config(config)
+    await ctx.reply(f"✅ **تم اعتماد الكاتيجوري `{category.name}` لتذاكر الدعم الفني.**", mention_author=False)
+
+
+# =========================================================
+# ================= 🔔 نظام التذكير التلقائي =============
+# =========================================================
+
+# --- أمر التذكير المخصص للـ Admins ---
+@bot.command(name="remind")
+async def remind_command(ctx: commands.Context, duration: str, *, reminder_text: str):
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+
+    seconds = parse_time(duration)
+    if seconds is None:
+        await ctx.send("⚠️ **صيغة الوقت غير صحيحة! استخدم مثلاً: `30m` أو `2h` أو `1d`**", delete_after=5)
+        return
+
+    remind_time = discord.utils.utcnow() + discord.timedelta(seconds=seconds)
+    await ctx.send(f"⏰ **تم ضبط التذكير!** سأقوم بتذكيرك بـ: `{reminder_text}` في <t:{int(remind_time.timestamp())}:R>", delete_after=10)
+
+    await asyncio.sleep(seconds)
+
+    embed = discord.Embed(
+        title="🔔 **تنبيه وتذكير إداري!**",
+        description=f"مرحباً {ctx.author.mention}\n\n📌 **موضوع التذكير:**\n```{reminder_text}```",
+        color=EMBED_COLOR
+    )
+    embed.set_footer(text=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
+    embed.timestamp = discord.utils.utcnow()
+
+    await ctx.channel.send(content=f"🔔 {ctx.author.mention}", embed=embed)
+
+
+# --- مهمة التذكير الآلي للتذاكر الخاملة (كل ساعة) ---
+@tasks.loop(hours=1)
+async def check_inactive_tickets():
+    now = discord.utils.utcnow()
+    for guild in bot.guilds:
+        for channel in guild.text_channels:
+            # فحص قنوات التذاكر (تشار إلى تذكرة شراء أو دعم)
+            if channel.name.startswith("buy-") or channel.name.startswith("support-"):
+                try:
+                    history = [m async for m in channel.history(limit=1)]
+                    if not history:
+                        continue
+
+                    last_msg = history[0]
+                    # إذا مرت أكثر من 24 ساعة على آخر رسالة
+                    if (now - last_msg.created_at).total_seconds() >= 86400:
+                        # استخراج صاحب التذكرة من الصلاحيات
+                        ticket_owner = None
+                        for target in channel.overwrites:
+                            if isinstance(target, discord.Member) and not target.bot:
+                                ticket_owner = target
+                                break
+
+                        if ticket_owner:
+                            embed = discord.Embed(
+                                title="⌛ **تذكير بتذكرة خاملة**",
+                                description=(
+                                    f"مرحباً {ticket_owner.mention} 👋\n\n"
+                                    f"لاحظنا عدم وجود أي تفاعل في التذكرة منذ 24 ساعة.\n"
+                                    f"يرجى توضيح طلبك أو الرد للربط مع فريق الدعم والإدارة.\n"
+                                    f"في حال تم قضاء طلبك، يمكنك إغلاق التذكرة عبر الزر في الأعلى."
+                                ),
+                                color=discord.Color.orange()
+                            )
+                            embed.set_footer(text=f"{guild.name} • Auto Reminder System")
+                            await channel.send(content=f"🔔 {ticket_owner.mention}", embed=embed)
+                except Exception as e:
+                    print(f"خطأ أثناء فحص التذكرة {channel.name}: {e}")
 
 
 # =========================================================
@@ -309,6 +434,7 @@ async def help_command(ctx: commands.Context):
         name="👑 الأوامر الإدارية العامة",
         value=(
             "`+clear <عدد>` • تنظيف ومسح الرسائل\n"
+            "`+remind <الوقت> <النص>` • ضبط تذكير مخصص\n"
             "`+cus <@العضو>` • منح رتبة العميل فوراً\n"
             "`+come <@العضو>` • استدعاء عضو إلى القناة\n"
             "`+font <النص>` • زخرفة النصوص بشكل احترافي\n"
@@ -321,6 +447,8 @@ async def help_command(ctx: commands.Context):
         name="🛍️ إعدادات المتجر والتذاكر",
         value=(
             "`+panel` • إرسال لوحة فتح التذاكر\n"
+            "`+bnm <ID>` • تعيين كاتيجوري تذاكر الشراء\n"
+            "`+dfg <ID>` • تعيين كاتيجوري تذاكر الدعم الفني\n"
             "`+setpay` • إعداد وتحديث طرق الدفع\n"
             "`+pay` • عرض طرق الدفع الحالية\n"
             "`+tax` • تعيين روم حساب الضريبة\n"
@@ -540,7 +668,6 @@ class TicketControlView(discord.ui.View):
 
         await interaction.response.send_message("🔒 **تم إغلاق التذكرة. سيتم حذف القناة تلقائياً خلال 5 ثوانٍ...**")
         
-        # تعطيل الكتابة فوراً
         for target, overwrite in interaction.channel.overwrites.items():
             if isinstance(target, discord.Member) and not target.bot:
                 overwrite.send_messages = False
@@ -560,7 +687,7 @@ class TicketSetupView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    async def _create_ticket_channel(self, interaction: discord.Interaction, prefix: str, title_msg: str, role_id: int):
+    async def _create_ticket_channel(self, interaction: discord.Interaction, prefix: str, title_msg: str, role_id: int, category_key: str):
         guild = interaction.guild
         member = interaction.user
 
@@ -581,12 +708,17 @@ class TicketSetupView(discord.ui.View):
             if role.permissions.administrator:
                 overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
 
-        category = discord.utils.get(guild.categories, name="TICKETS")
+        # اختيار الكاتيجوري من الإعدادات
+        cat_id = config.get(category_key)
+        category = guild.get_channel(cat_id) if cat_id else None
+
         if not category:
-            try:
-                category = await guild.create_category("TICKETS")
-            except Exception:
-                category = None
+            category = discord.utils.get(guild.categories, name="TICKETS")
+            if not category:
+                try:
+                    category = await guild.create_category("TICKETS")
+                except Exception:
+                    category = None
 
         ticket_channel = await guild.create_text_channel(
             name=f"{prefix}-{member.name[:8]}",
@@ -611,7 +743,7 @@ class TicketSetupView(discord.ui.View):
         custom_id="buy_ticket"
     )
     async def buy_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._create_ticket_channel(interaction, "buy", "🛒 تذكرة شراء منتج", BUY_ROLE_ID)
+        await self._create_ticket_channel(interaction, "buy", "🛒 تذكرة شراء منتج", BUY_ROLE_ID, "buy_category_id")
 
     @discord.ui.button(
         label="الدعم الفنى", 
@@ -620,7 +752,7 @@ class TicketSetupView(discord.ui.View):
         custom_id="support_ticket"
     )
     async def support_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._create_ticket_channel(interaction, "support", "🛠️ تذكرة الدعم الفني والاستفسارات", SUPPORT_ROLE_ID)
+        await self._create_ticket_channel(interaction, "support", "🛠️ تذكرة الدعم الفني والاستفسارات", SUPPORT_ROLE_ID, "support_category_id")
 
 
 @bot.command(name="panel")
@@ -765,24 +897,6 @@ class GiveawayView(discord.ui.View):
             await interaction.response.send_message("🎉 **تم تسجيل مشاركتك بنجاح! بالتوفيق.**", ephemeral=True)
 
 
-def parse_time(time_str: str) -> int:
-    unit = time_str[-1].lower()
-    try:
-        val = int(time_str[:-1])
-    except ValueError:
-        return None
-
-    if unit == "s":
-        return val
-    elif unit == "m":
-        return val * 60
-    elif unit == "h":
-        return val * 3600
-    elif unit == "d":
-        return val * 86400
-    return None
-
-
 @bot.command(name="giveaway")
 async def giveaway(ctx: commands.Context, duration: str, prize: str, winners_count: int = 1):
     try:
@@ -875,7 +989,6 @@ async def _send_broadcast(ctx: commands.Context, members: list, message: str, la
     )
 
 
-# --- امر البرودكاست لشخص واحد فقط ---
 @bot.command(name="bc")
 async def bc_single(ctx: commands.Context, member: discord.Member, *, message: str):
     try:
