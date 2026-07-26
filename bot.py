@@ -2,6 +2,7 @@ import os
 import re
 import json
 import math
+import random
 import asyncio
 import discord
 from discord.ext import commands
@@ -25,7 +26,7 @@ SUPPORT_ROLE_ID = 1530413725578694746  # رتبة الدعم الفني
 ALLOWED_USER_ID = 1426552057984454817
 
 STAR_EMOJI = "⭐"
-EMBED_COLOR = discord.Color.from_rgb(47, 49, 54) # لون أنيق وفاخر
+EMBED_COLOR = discord.Color.from_rgb(47, 49, 54) # لون فاخر وراقي
 
 DEFAULT_PAYMENT_METHODS = {
     "مدار": "لايوجد",
@@ -76,7 +77,6 @@ bot = commands.Bot(command_prefix="+", intents=intents, help_command=None)
 async def restrict_to_admin(ctx: commands.Context):
     if ctx.guild is None:
         return False
-    # استثناء أمر cv ليسمح لصاحب الآيدي فقط
     if ctx.command and ctx.command.name == "cv":
         return True
     return ctx.author.guild_permissions.administrator
@@ -87,7 +87,7 @@ async def on_command_error(ctx: commands.Context, error):
     if isinstance(error, commands.CheckFailure):
         await ctx.reply("❌ **عذراً، هذا الأمر مخصص فقط لإدارة السيرفر.**", mention_author=False)
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.reply(f"⚠️ **الرجاء كتابة المعطى المطلوب:** `{error.param.name}`", mention_author=False)
+        await ctx.reply(f"⚠️ **الرجاء كتابة المعطى المطلوب بشكل صحيح.**", mention_author=False)
     elif isinstance(error, commands.BadArgument):
         await ctx.reply("⚠️ **تأكد من صحة البيانات أو المنشن المدخل.**", mention_author=False)
     elif isinstance(error, commands.CommandNotFound):
@@ -106,7 +106,6 @@ async def on_ready():
 # ---------- دالة استخراج وتحويل المبالغ (دعم k, m, b) ----------
 def parse_amount(text: str):
     cleaned = text.strip().replace(",", "").lower()
-    
     match = re.match(r"^(\d+(?:\.\d+)?)\s*([kmb])?$", cleaned)
     if not match:
         return None
@@ -138,7 +137,7 @@ async def on_member_join(member: discord.Member):
             f"مرحباً بك {member.mention} في **{member.guild.name}** 🌸\n"
             f"نتمنى لك أوقاتاً ممتعة وتجربة رائعة معنا!"
         ),
-        color=discord.Color.from_rgb(88, 101, 242)
+        color=EMBED_COLOR
     )
     embed.set_thumbnail(url=member.display_avatar.url)
     embed.add_field(name="👤 العضو", value=member.mention, inline=True)
@@ -173,11 +172,31 @@ async def on_message(message: discord.Message):
             amount = parse_amount(message.content)
             if amount is not None:
                 total_with_tax = math.ceil(amount / 0.95)
-                await message.reply(f"**المبلغ مع الضريبة:** `{total_with_tax}`", mention_author=False)
+                await message.reply(f"💳 **المبلغ مع الضريبة:** `{total_with_tax:,}`", mention_author=False)
 
         await bot.process_commands(message)
     finally:
         processing_messages.discard(message.id)
+
+
+# =========================================================
+# ===================== أمر Clear (+clear) ================
+# =========================================================
+
+@bot.command(name="clear")
+async def clear_messages(ctx: commands.Context, amount: int = 100):
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+
+    deleted = await ctx.channel.purge(limit=amount)
+    msg = await ctx.send(f"🧹 **تم مسح `{len(deleted)}` رسالة بنجاح.**")
+    await asyncio.sleep(3)
+    try:
+        await msg.delete()
+    except Exception:
+        pass
 
 
 # =========================================================
@@ -186,20 +205,17 @@ async def on_message(message: discord.Message):
 
 @bot.command(name="cv")
 async def cv_command(ctx: commands.Context):
-    # مسح رسالة الأمر مباشرة
     try:
         await ctx.message.delete()
     except Exception:
         pass
 
-    # التأكد من آيدي الشخص المسموح له فقط
     if ctx.author.id != ALLOWED_USER_ID:
         return
 
     guild = ctx.guild
     channel = ctx.channel
 
-    # إغلاق الصلاحيات الـ 4 المحددة في الصورة فقط للعامة
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(
             send_messages=False,
@@ -220,7 +236,6 @@ async def cv_command(ctx: commands.Context):
         )
     }
 
-    # رتبة الشراء (إيقاف الكتابة والثريد)
     buy_role = guild.get_role(BUY_ROLE_ID)
     if buy_role:
         overwrites[buy_role] = discord.PermissionOverwrite(
@@ -230,7 +245,6 @@ async def cv_command(ctx: commands.Context):
             create_private_threads=False
         )
 
-    # رتبة الدعم الفني (إيقاف الكتابة والثريد)
     support_role = guild.get_role(SUPPORT_ROLE_ID)
     if support_role:
         overwrites[support_role] = discord.PermissionOverwrite(
@@ -240,7 +254,6 @@ async def cv_command(ctx: commands.Context):
             create_private_threads=False
         )
 
-    # تطبيق التعديلات بصمت
     try:
         await channel.edit(overwrites=overwrites)
     except Exception as e:
@@ -270,8 +283,8 @@ async def give_customer_role(ctx: commands.Context, member: discord.Member):
     try:
         await member.add_roles(role)
         embed = discord.Embed(
-            description=f"✅ **تم منح رتبة {role.mention} إلى {member.mention} بنجاح!** 🎉",
-            color=discord.Color.green()
+            description=f"✨ **تم منح رتبة {role.mention} إلى {member.mention} بنجاح!** 🎉",
+            color=EMBED_COLOR
         )
         await ctx.send(embed=embed)
     except discord.Forbidden:
@@ -287,24 +300,25 @@ async def give_customer_role(ctx: commands.Context, member: discord.Member):
 @bot.command(name="help")
 async def help_command(ctx: commands.Context):
     embed = discord.Embed(
-        title="🛠️ قائمة الأوامر والتحكم",
-        description="البريفكس المعتمد: `+`\n*جميع الأوامر تتطلب صلاحيات الإدارة العليا.*",
+        title="⚙️ لوحة الأوامر والتحكم الكاملة",
+        description="البريفكس المعتمد: `+`\n*جميع الأوامر مخصصة لإدارة السيرفر.*",
         color=EMBED_COLOR,
     )
     
     embed.add_field(
         name="👑 الأوامر الإدارية العامة",
         value=(
-            "`+cus <@العضو>` • إعطاء رتبة العميل فوراً\n"
-            "`+come <@العضو>` • استدعاء عضو إلى التذكرة\n"
-            "`+font <النص>` • زخرفة النص بشكل فخم\n"
+            "`+clear <عدد>` • تنظيف ومسح الرسائل\n"
+            "`+cus <@العضو>` • منح رتبة العميل فوراً\n"
+            "`+come <@العضو>` • استدعاء عضو إلى القناة\n"
+            "`+font <النص>` • زخرفة النصوص بشكل احترافي\n"
             "`+say <الرسالة>` • إرسال نص باسم البوت\n"
             "`+say-embed <الرسالة>` • إرسال إيمبد منسق"
         ),
         inline=False
     )
     embed.add_field(
-        name="⚙️ إعدادات المتجر والتذاكر",
+        name="🛍️ إعدادات المتجر والتذاكر",
         value=(
             "`+panel` • إرسال لوحة فتح التذاكر\n"
             "`+setpay` • إعداد وتحديث طرق الدفع\n"
@@ -319,9 +333,10 @@ async def help_command(ctx: commands.Context):
     embed.add_field(
         name="📢 البرودكاست والفعاليات",
         value=(
-            "`+giveaway <الدقائق> <الجائزة>` • إنشاء قيفاوي\n"
-            "`+bcall <الرسالة>` • إرسال خاص للكل\n"
-            "`+bc-role <@الرتبة> <الرسالة>` • إرسال خاص لرتبة\n"
+            "`+giveaway 4m المنتج 1` • إنشاء مسابقة قيفاوي\n"
+            "`+bc <@العضو> <الرسالة>` • إرسال برودكاست لشخص واحد\n"
+            "`+bcall <الرسالة>` • إرسال خاص للجميع\n"
+            "`+bc-role <@الرتبة> <الرسالة>` • إرسال خاص لرتبة محددة\n"
             "`+bc_online <الرسالة>` • إرسال للمتواجدين أونلاين"
         ),
         inline=False
@@ -346,14 +361,14 @@ async def tax_setup(ctx: commands.Context):
 @bot.command(name="ping")
 async def ping(ctx: commands.Context):
     latency = round(bot.latency * 1000)
-    await ctx.reply(f"⚡ **سرعة الاتصال:** `{latency}ms`", mention_author=False)
+    await ctx.reply(f"⚡ **سرعة الاستجابة:** `{latency}ms`", mention_author=False)
 
 
 # ---------- +serverinfo ----------
 @bot.command(name="serverinfo")
 async def serverinfo(ctx: commands.Context):
     guild = ctx.guild
-    embed = discord.Embed(title=f"📊 معلومات سيرفر: {guild.name}", color=EMBED_COLOR)
+    embed = discord.Embed(title=f"📊 معلومات السيرفر: {guild.name}", color=EMBED_COLOR)
     if guild.icon:
         embed.set_thumbnail(url=guild.icon.url)
     embed.add_field(name="👥 الأعضاء", value=f"**{guild.member_count}**", inline=True)
@@ -377,7 +392,7 @@ async def font_text(ctx: commands.Context, *, text: str):
     fancy_result = text.translate(trans_table)
 
     embed = discord.Embed(
-        title="✨ زخرفة النصوص الاحترافية",
+        title="✨ زخرفة النصوص",
         description=f"**الـنـص الأصـلـي:**\n```{text}```\n**الـنـص المـزخـرف:**\n```{fancy_result}```",
         color=EMBED_COLOR
     )
@@ -392,14 +407,14 @@ async def come_command(ctx: commands.Context, member: discord.Member):
     channel_link = f"https://discord.com/channels/{ctx.guild.id}/{ctx.channel.id}"
     
     embed = discord.Embed(
-        title="📩 استدعاء إلى التذكرة",
+        title="📩 استدعاء مباشر",
         description=(
             f"مرحباً {member.mention} 👋\n\n"
             f"فريق الإدارة بانتظارك في الروم التالي:\n"
             f"📌 **[{ctx.channel.name}]({channel_link})**\n\n"
             f"يرجى التوجه إلى القناة في أقرب وقت."
         ),
-        color=discord.Color.gold()
+        color=EMBED_COLOR
     )
     embed.set_footer(text=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
     embed.timestamp = discord.utils.utcnow()
@@ -408,7 +423,7 @@ async def come_command(ctx: commands.Context, member: discord.Member):
         await member.send(embed=embed)
         await ctx.reply(f"✅ **تم إرسال الإشعار بنجاح إلى {member.mention}**", mention_author=False)
     except discord.Forbidden:
-        await ctx.reply(f"❌ **لم نتمكن من إرسال الرسالة لـ {member.mention} (الخاص مقفل).**", mention_author=False)
+        await ctx.reply(f"❌ **تعذر الإرسال لـ {member.mention} (الخاص مقفل).**", mention_author=False)
 
 
 # ---------- +setup-welcome ----------
@@ -442,11 +457,11 @@ async def rate_setup(ctx: commands.Context, channel_id: int):
 # =========================================================
 
 class SetPayModal(discord.ui.Modal, title="تحديث طرق الدفع"):
-    libyana = discord.ui.TextInput(label="رقم ليبيانا", placeholder="أدخل الرقم هنا...", required=False)
-    madar = discord.ui.TextInput(label="رقم المدار", placeholder="أدخل الرقم هنا...", required=False)
-    binance = discord.ui.TextInput(label="بايننس (Binance)", placeholder="أدخل العنوان هنا...", required=False)
-    ltc = discord.ui.TextInput(label="عنوان لايتكوين (LTC)", placeholder="أدخل العنوان هنا...", required=False)
-    credit = discord.ui.TextInput(label="رصيد / كريديت", placeholder="أدخل البيانات هنا...", required=False)
+    libyana = discord.ui.TextInput(label="رقم ليبيانا", placeholder="أدخل الرقم...", required=False)
+    madar = discord.ui.TextInput(label="رقم المدار", placeholder="أدخل الرقم...", required=False)
+    binance = discord.ui.TextInput(label="بايننس (Binance)", placeholder="أدخل العنوان...", required=False)
+    ltc = discord.ui.TextInput(label="عنوان لايتكوين (LTC)", placeholder="أدخل العنوان...", required=False)
+    credit = discord.ui.TextInput(label="رصيد / كريديت", placeholder="أدخل البيانات...", required=False)
 
     async def on_submit(self, interaction: discord.Interaction):
         config["payment_methods"] = {
@@ -495,16 +510,16 @@ async def pay_command(ctx: commands.Context):
 
     embed = discord.Embed(
         title="💳 طرق الدفع المعتمدة",
-        description="**اختر طريقة الدفع المناسبة لك واستخدم البيانات الموضحة أدناه:**",
+        description="**يرجى اختيار طريقة الدفع المناسبة وتحويل المبلغ المطلوبة:**",
         color=EMBED_COLOR
     )
     
-    embed.add_field(name="📞 ليبيانا", value=f"`{payments.get('ليبيانا', 'لايوجد')}`", inline=False)
+    embed.add_field(name="📱 ليبيانا", value=f"`{payments.get('ليبيانا', 'لايوجد')}`", inline=False)
     embed.add_field(name="📱 مدار", value=f"`{payments.get('مدار', 'لايوجد')}`", inline=False)
     embed.add_field(name="🟡 بايننس", value=f"`{payments.get('بايننس', 'لايوجد')}`", inline=False)
-    embed.add_field(name="🏛️ لايت كوين", value=f"`{payments.get('LTC', 'لايوجد')}`", inline=False)
+    embed.add_field(name="🏛️ LTC", value=f"`{payments.get('LTC', 'لايوجد')}`", inline=False)
     embed.add_field(name="💳 كريديت", value=f"`{payments.get('كريديت', 'لايوجد')}`", inline=False)
-    embed.set_footer(text="يرجى التأكد من المبالغ وإرسال الإثبات في التذكرة.")
+    embed.set_footer(text="يرجى إرسال صورة الإثبات داخل التذكرة بعد التحويل.")
 
     await ctx.send(embed=embed)
 
@@ -517,14 +532,15 @@ class TicketControlView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="إغلاق التذكرة", emoji="🔒", style=discord.ButtonStyle.danger, custom_id="close_ticket")
+    @discord.ui.button(label="إغلاق وحذف التذكرة", emoji="🔒", style=discord.ButtonStyle.danger, custom_id="close_ticket")
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator and not interaction.channel.name.endswith(str(interaction.user.id)[-4:]):
             await interaction.response.send_message("❌ **ليس لديك صلاحية لإغلاق هذه التذكرة.**", ephemeral=True)
             return
 
-        await interaction.response.send_message("🔒 **جاري قفل التذكرة...**", ephemeral=True)
+        await interaction.response.send_message("🔒 **تم إغلاق التذكرة. سيتم حذف القناة تلقائياً خلال 5 ثوانٍ...**")
         
+        # تعطيل الكتابة فوراً
         for target, overwrite in interaction.channel.overwrites.items():
             if isinstance(target, discord.Member) and not target.bot:
                 overwrite.send_messages = False
@@ -533,21 +549,7 @@ class TicketControlView(discord.ui.View):
                 except Exception:
                     pass
         
-        await interaction.followup.send("⚠️ **تم قفل التذكرة بنجاح. يمكنك حذف الروم عبر الزر أدناه:**", view=TicketDeleteView())
-
-
-class TicketDeleteView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="حذف التذكرة", emoji="🗑️", style=discord.ButtonStyle.secondary, custom_id="delete_ticket")
-    async def delete_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ **هذا الزر مخصص للإدارة فقط.**", ephemeral=True)
-            return
-        
-        await interaction.response.send_message("🗑️ **جاري حذف التذكرة خلال 3 ثوانٍ...**", ephemeral=True)
-        await asyncio.sleep(3)
+        await asyncio.sleep(5)
         try:
             await interaction.channel.delete()
         except Exception:
@@ -567,7 +569,7 @@ class TicketSetupView(discord.ui.View):
             await interaction.response.send_message(f"❌ **لديك تذكرة مفتوحة بالفعل:** {existing_channel.mention}", ephemeral=True)
             return
 
-        await interaction.response.send_message("⏳ **جاري فتح التذكرة الخاصة بك...**", ephemeral=True)
+        await interaction.response.send_message("⏳ **جاري إنشاء التذكرة الخاص بك...**", ephemeral=True)
 
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
@@ -594,10 +596,10 @@ class TicketSetupView(discord.ui.View):
 
         embed = discord.Embed(
             title=title_msg,
-            description=f"أهلاً بك {member.mention}\nيرجى توضيح طلبك بالتفصيل وسيقوم الفريق بالرد عليك في أقرب وقت.",
+            description=f"أهلاً بك {member.mention} 👋\nيرجى كتابة تفاصيل طلبك بوضوح وسيقوم الطاقم بالرد عليك فوراً.",
             color=EMBED_COLOR
         )
-        embed.set_footer(text=f"{guild.name} • Axion Store", icon_url=guild.icon.url if guild.icon else None)
+        embed.set_footer(text=f"{guild.name} • Ticket System", icon_url=guild.icon.url if guild.icon else None)
 
         mention_content = f"{member.mention} <@&{role_id}>"
         await ticket_channel.send(content=mention_content, embed=embed, view=TicketControlView())
@@ -631,12 +633,11 @@ async def panel_command(ctx: commands.Context):
     embed = discord.Embed(
         title="🎫 مركز الشراء والدعم الفني",
         description=(
-            "اختر نوع التذكرة المناسب، وسيقوم الفريق بمراجعة طلبك ومساعدتك بأسرع وقت.\n\n"
+            "يرجى الضغط على الزر المناسب لفتح تذكرة مع فريق الإدارة:\n\n"
             "🛒 **شراء منتج**\n"
-            "• لشراء أو الاستفسار عن تفاصيل المنتجات والأسعار المتاحة.\n\n"
+            "• للشراء أو الاستفسار عن تفاصيل والأسعار.\n\n"
             "🛠️ **الدعم الفني**\n"
-            "• للمشاكل التقنية، الاستفسارات، أو أي مساعدة تخص السيرفر.\n\n"
-            "*يرجى اختيار النوع الصحيح وكتابة التفاصيل بوضوح.*"
+            "• للمشاكل التقنية، والاستفسارات العامة."
         ),
         color=EMBED_COLOR
     )
@@ -671,13 +672,13 @@ class RateModal(discord.ui.Modal, title="تقييم الخدمة"):
 
         embed = discord.Embed(
             description=(
-                f"**تم إرسال التقييم بواسطة:** {self.buyer.mention}\n\n"
-                f"📦 **البائع:** {self.seller.mention}\n"
+                f"**تم التقييم بواسطة:** {self.buyer.mention}\n\n"
+                f"👤 **البائع:** {self.seller.mention}\n"
                 f"🛍️ **المنتج:** `{self.product}`\n\n"
                 f"🌟 **التقييم:** {stars}\n\n"
                 f"💬 **التعليق:**\n```{self.comment.value}```"
             ),
-            color=discord.Color.gold()
+            color=EMBED_COLOR
         )
         embed.set_footer(text="نظام التقييمات المعتمد")
         embed.timestamp = discord.utils.utcnow()
@@ -686,9 +687,9 @@ class RateModal(discord.ui.Modal, title="تقييم الخدمة"):
         reviews_channel = bot.get_channel(reviews_channel_id)
         if reviews_channel:
             await reviews_channel.send(embed=embed)
-            await interaction.response.send_message("✅ **شكراً جزيلاً على تقييمك العطر!**", ephemeral=True)
+            await interaction.response.send_message("✅ **شكراً جزيلاً على تقييمك!**", ephemeral=True)
         else:
-            await interaction.response.send_message("⚠️ **ما قدرت ألقى روم التقييمات.**", ephemeral=True)
+            await interaction.response.send_message("⚠️ **لم يتم العثور على قناة التقييمات.**", ephemeral=True)
 
         self.rate_view.rate_button.disabled = True
         self.rate_view.rate_button.label = "تم التقييم بنجاح ✅"
@@ -716,7 +717,7 @@ async def rate_prefix(ctx: commands.Context, buyer: discord.Member, *, product: 
     
     embed = discord.Embed(
         description=f"{buyer.mention} 👋 **شكراً لثقتك بنا!**\nنتمنى منك مشاركة رأيك وتقييم الخدمة عبر الزر أدناه.",
-        color=discord.Color.gold()
+        color=EMBED_COLOR
     )
     await ctx.send(embed=embed, view=view)
 
@@ -752,30 +753,92 @@ async def say_embed(ctx: commands.Context, *, message: str):
 class GiveawayView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
+        self.entries = set()
 
-    @discord.ui.button(label="مشاركة في المسابقة", emoji="🎉", style=discord.ButtonStyle.success, custom_id="join_giveaway")
+    @discord.ui.button(label="المشاركة بالمسابقة", emoji="🎉", style=discord.ButtonStyle.primary, custom_id="join_giveaway")
     async def join_giveaway(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("🎉 **تم تسجيل مشاركتك بنجاح! بالتوفيق.**", ephemeral=True)
+        if interaction.user.id in self.entries:
+            self.entries.remove(interaction.user.id)
+            await interaction.response.send_message("❌ **تم إلغاء مشاركتك في المسابقة.**", ephemeral=True)
+        else:
+            self.entries.add(interaction.user.id)
+            await interaction.response.send_message("🎉 **تم تسجيل مشاركتك بنجاح! بالتوفيق.**", ephemeral=True)
+
+
+def parse_time(time_str: str) -> int:
+    unit = time_str[-1].lower()
+    try:
+        val = int(time_str[:-1])
+    except ValueError:
+        return None
+
+    if unit == "s":
+        return val
+    elif unit == "m":
+        return val * 60
+    elif unit == "h":
+        return val * 3600
+    elif unit == "d":
+        return val * 86400
+    return None
 
 
 @bot.command(name="giveaway")
-async def giveaway(ctx: commands.Context, minutes: int, *, prize: str):
+async def giveaway(ctx: commands.Context, duration: str, prize: str, winners_count: int = 1):
     try:
         await ctx.message.delete()
     except Exception:
         pass
-    
-    end_time = discord.utils.utcnow() + discord.timedelta(minutes=minutes)
+
+    seconds = parse_time(duration)
+    if seconds is None:
+        await ctx.send("⚠️ **صيغة الوقت غير صحيحة! استخدم مثلاً: `4m` أو `1h` أو `30s`**")
+        return
+
+    end_time = discord.utils.utcnow() + discord.timedelta(seconds=seconds)
     
     embed = discord.Embed(
-        title="🎁 **مسابقة جديدة (GIVEAWAY)** 🎁",
-        description=f"🏆 **الجائزة:** `{prize}`\n\nاضغط على الزر أدناه لإنشاء مشاركتك!\n\n⏰ **تنتهي المسابقة:** <t:{int(end_time.timestamp())}:R>",
-        color=discord.Color.gold()
+        title="🎉 **سحب على مسابقة جديدة!** 🎉",
+        description=(
+            f"🎁 **الجائزة:** `{prize}`\n"
+            f"👥 **عدد الفائزين:** `{winners_count}`\n"
+            f"👑 **المنظم:** {ctx.author.mention}\n\n"
+            f"⏰ **ينتهي في:** <t:{int(end_time.timestamp())}:R>"
+        ),
+        color=EMBED_COLOR
     )
-    embed.set_footer(text=f"بواسطة: {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
+    embed.set_footer(text=f"{ctx.guild.name} • Giveaway System", icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
     
     view = GiveawayView()
-    await ctx.send(embed=embed, view=view)
+    msg = await ctx.send(embed=embed, view=view)
+
+    await asyncio.sleep(seconds)
+
+    if not view.entries:
+        end_embed = discord.Embed(
+            title="🎉 **انتهت المسابقة** 🎉",
+            description=f"🎁 **الجائزة:** `{prize}`\n\n❌ **لم يشارك أحد في المسابقة.**",
+            color=discord.Color.red()
+        )
+        await msg.edit(embed=end_embed, view=None)
+        return
+
+    winner_ids = list(view.entries)
+    actual_winners_count = min(winners_count, len(winner_ids))
+    winner_mentions = random.sample(winner_ids, actual_winners_count)
+    winners_text = ", ".join([f"<@{w_id}>" for w_id in winner_mentions])
+
+    end_embed = discord.Embed(
+        title="🎉 **انتهت المسابقة!** 🎉",
+        description=(
+            f"🎁 **الجائزة:** `{prize}`\n"
+            f"🏆 **الفائزون:** {winners_text}\n"
+            f"👑 **المنظم:** {ctx.author.mention}"
+        ),
+        color=EMBED_COLOR
+    )
+    await msg.edit(embed=end_embed, view=None)
+    await ctx.send(f"🎊 **ألف مبروك للفائزين:** {winners_text} 🎉\nلقد فزتم بـ **{prize}**!")
 
 
 # =========================================================
@@ -789,7 +852,7 @@ async def _send_broadcast(ctx: commands.Context, members: list, message: str, la
     embed = discord.Embed(
         title=f"📢 إعلان رسمي من {ctx.guild.name}",
         description=message,
-        color=discord.Color.gold(),
+        color=EMBED_COLOR
     )
     embed.set_footer(text=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
 
@@ -810,6 +873,28 @@ async def _send_broadcast(ctx: commands.Context, members: list, message: str, la
             f"• تعذر الإرسال إلى: **{failed}**"
         )
     )
+
+
+# --- امر البرودكاست لشخص واحد فقط ---
+@bot.command(name="bc")
+async def bc_single(ctx: commands.Context, member: discord.Member, *, message: str):
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+
+    embed = discord.Embed(
+        title=f"📢 رسالة خاصة من إدارة {ctx.guild.name}",
+        description=message,
+        color=EMBED_COLOR
+    )
+    embed.set_footer(text=f"بواسطة: {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
+
+    try:
+        await member.send(embed=embed)
+        await ctx.send(f"✅ **تم إرسال البرودكاست إلى {member.mention} بنجاح.**", delete_after=5)
+    except discord.Forbidden:
+        await ctx.send(f"❌ **تعذر الإرسال لـ {member.mention} (الخاص مقفل).**", delete_after=5)
 
 
 @bot.command(name="bcall")
