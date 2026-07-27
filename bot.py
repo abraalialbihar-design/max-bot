@@ -138,7 +138,6 @@ class TicketSetupView(discord.ui.View):
             overwrites=overwrites
         )
 
-        # إرسال الرسالة المخفية للعضو كما في الصورة تماماً
         await interaction.response.send_message(f"✅ **تم إنشاء التذكرة بنجاح!** {ticket_channel.mention}", ephemeral=True)
 
         embed = discord.Embed(
@@ -183,7 +182,6 @@ class CustomBot(commands.Bot):
         super().__init__(command_prefix="+", intents=intents, help_command=None)
 
     async def setup_hook(self):
-        # تسجيل الأزرار للعمل المستمر حتى بعد الـ Restart
         self.add_view(TicketSetupView())
         self.add_view(TicketControlView())
 
@@ -205,7 +203,7 @@ async def on_command_error(ctx: commands.Context, error):
     if isinstance(error, commands.CheckFailure):
         await ctx.reply("❌ **عذراً، هذا الأمر مخصص فقط لإدارة السيرفر.**", mention_author=False)
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.reply(f"⚠️ **الرجاء كتابة المعطى المطلوب بشكل صحيح.**", mention_author=False)
+        await ctx.reply("⚠️ **الرجاء كتابة المعطى المطلوب بشكل صحيح.**", mention_author=False)
     elif isinstance(error, commands.BadArgument):
         await ctx.reply("⚠️ **تأكد من صحة البيانات أو المنشن المدخل.**", mention_author=False)
     elif isinstance(error, commands.CommandNotFound):
@@ -224,7 +222,7 @@ async def on_ready():
         check_inactive_tickets.start()
 
 
-# ---------- دالة استخراج وتحويل المبالغ ----------
+# ---------- دالة استخراج وتحويل المبالغ والأوقات ----------
 def parse_amount(text: str):
     cleaned = text.strip().replace(",", "").lower()
     match = re.match(r"^(\d+(?:\.\d+)?)\s*([kmb])?$", cleaned)
@@ -605,9 +603,8 @@ async def help_command(ctx: commands.Context):
         inline=False
     )
     embed.add_field(
-        name="📢 البرودكاست والفعاليات",
+        name="📢 البرودكاست والإعلانات",
         value=(
-            "`+giveaway 4m المنتج 1` • إنشاء مسابقة قيفاوي\n"
             "`+bc <@العضو> <الرسالة>` • إرسال برودكاست لشخص واحد\n"
             "`+bcall <الرسالة>` • إرسال خاص للجميع\n"
             "`+bc-role <@الرتبة> <الرسالة>` • إرسال خاص لرتبة محددة\n"
@@ -918,83 +915,6 @@ async def say_embed(ctx: commands.Context, *, message: str):
     
     embed = discord.Embed(description=message, color=EMBED_COLOR)
     await ctx.send(embed=embed)
-
-
-# =========================================================
-# ==================== نظام القيفاوي ======================
-# =========================================================
-
-class GiveawayView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-        self.entries = set()
-
-    @discord.ui.button(label="المشاركة بالمسابقة", emoji="🎉", style=discord.ButtonStyle.primary, custom_id="join_giveaway")
-    async def join_giveaway(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id in self.entries:
-            self.entries.remove(interaction.user.id)
-            await interaction.response.send_message("❌ **تم إلغاء مشاركتك في المسابقة.**", ephemeral=True)
-        else:
-            self.entries.add(interaction.user.id)
-            await interaction.response.send_message("🎉 **تم تسجيل مشاركتك بنجاح! بالتوفيق.**", ephemeral=True)
-
-
-@bot.command(name="giveaway")
-async def giveaway(ctx: commands.Context, duration: str, prize: str, winners_count: int = 1):
-    try:
-        await ctx.message.delete()
-    except Exception:
-        pass
-
-    seconds = parse_time(duration)
-    if seconds is None:
-        await ctx.send("⚠️ **صيغة الوقت غير صحيحة! استخدم مثلاً: `4m` أو `1h` أو `30s`**")
-        return
-
-    end_time = discord.utils.utcnow() + discord.timedelta(seconds=seconds)
-    
-    embed = discord.Embed(
-        title="🎉 **سحب على مسابقة جديدة!** 🎉",
-        description=(
-            f"🎁 **الجائزة:** `{prize}`\n"
-            f"👥 **عدد الفائزين:** `{winners_count}`\n"
-            f"👑 **المنظم:** {ctx.author.mention}\n\n"
-            f"⏰ **ينتهي في:** <t:{int(end_time.timestamp())}:R>"
-        ),
-        color=EMBED_COLOR
-    )
-    embed.set_footer(text=f"{ctx.guild.name} • Giveaway System", icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
-    
-    view = GiveawayView()
-    msg = await ctx.send(embed=embed, view=view)
-
-    await asyncio.sleep(seconds)
-
-    if not view.entries:
-        end_embed = discord.Embed(
-            title="🎉 **انتهت المسابقة** 🎉",
-            description=f"🎁 **الجائزة:** `{prize}`\n\n❌ **لم يشارك أحد في المسابقة.**",
-            color=discord.Color.red()
-        )
-        await msg.edit(embed=end_embed, view=None)
-        return
-
-    winner_ids = list(view.entries)
-    actual_winners_count = min(winners_count, len(winner_ids))
-    winner_mentions = random.sample(winner_ids, actual_winners_count)
-    winners_text = ", ".join([f"<@{w_id}>" for w_id in winner_mentions])
-
-    end_embed = discord.Embed(
-        title="🎉 **انتهت المسابقة!** 🎉",
-        description=(
-            f"🎁 **الجائزة:** `{prize}`\n"
-            f"🏆 **الفائزون:** {winners_text}\n"
-            f"👑 **المنظم:** {ctx.author.mention}"
-        ),
-        color=EMBED_COLOR
-    )
-    await msg.edit(embed=end_embed, view=None)
-    await ctx.send(f"🎊 **ألف مبروك للفائزين:** {winners_text} 🎉\nلقد فزتم بـ **{prize}**!")
 
 
 # =========================================================
