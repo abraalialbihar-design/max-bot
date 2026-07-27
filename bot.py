@@ -232,30 +232,39 @@ async def set_support_category(ctx: commands.Context, category_id: int):
 
 
 # =========================================================
-# ================= 🔔 نظام التذكير التلقائي =============
+# ================= 🔔 نظام التذكير والتنبيهات =============
 # =========================================================
 
-# --- أمر التذكير المخصص للـ Admins ---
+# --- أمر التذكير المخصص ---
 @bot.command(name="remind")
-async def remind_command(ctx: commands.Context, duration: str, *, reminder_text: str):
+async def remind_command(ctx: commands.Context, duration: str = None, *, reminder_text: str = None):
+    if not duration or not reminder_text:
+        await ctx.reply("⚠️ **طريقة الاستخدام:**\n`+remind 30m تجديد السيرفر`", mention_author=False)
+        return
+
+    seconds = parse_time(duration)
+    if seconds is None:
+        await ctx.reply("⚠️ **صيغة الوقت غير صحيحة!** استخدم: `s`, `m`, `h`, `d` (مثال: `30m`).", mention_author=False)
+        return
+
     try:
         await ctx.message.delete()
     except Exception:
         pass
 
-    seconds = parse_time(duration)
-    if seconds is None:
-        await ctx.send("⚠️ **صيغة الوقت غير صحيحة! استخدم مثلاً: `30m` أو `2h` أو `1d`**", delete_after=5)
-        return
-
     remind_time = discord.utils.utcnow() + discord.timedelta(seconds=seconds)
-    await ctx.send(f"⏰ **تم ضبط التذكير!** سأقوم بتذكيرك بـ: `{reminder_text}` في <t:{int(remind_time.timestamp())}:R>", delete_after=10)
+    await ctx.send(
+        f"⏰ {ctx.author.mention} **تم ضبط التذكير بنجاح!**\n"
+        f"📌 **المهمة:** `{reminder_text}`\n"
+        f"⏳ **موعد التنبيه:** <t:{int(remind_time.timestamp())}:R>",
+        delete_after=10
+    )
 
     await asyncio.sleep(seconds)
 
     embed = discord.Embed(
-        title="🔔 **تنبيه وتذكير إداري!**",
-        description=f"مرحباً {ctx.author.mention}\n\n📌 **موضوع التذكير:**\n```{reminder_text}```",
+        title="🔔 **تنبيه وتذكير!**",
+        description=f"مرحباً {ctx.author.mention} 👋\n\n📌 **موضوع التذكير:**\n```{reminder_text}```",
         color=EMBED_COLOR
     )
     embed.set_footer(text=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
@@ -270,7 +279,6 @@ async def check_inactive_tickets():
     now = discord.utils.utcnow()
     for guild in bot.guilds:
         for channel in guild.text_channels:
-            # فحص قنوات التذاكر (تشار إلى تذكرة شراء أو دعم)
             if channel.name.startswith("buy-") or channel.name.startswith("support-"):
                 try:
                     history = [m async for m in channel.history(limit=1)]
@@ -278,9 +286,7 @@ async def check_inactive_tickets():
                         continue
 
                     last_msg = history[0]
-                    # إذا مرت أكثر من 24 ساعة على آخر رسالة
                     if (now - last_msg.created_at).total_seconds() >= 86400:
-                        # استخراج صاحب التذكرة من الصلاحيات
                         ticket_owner = None
                         for target in channel.overwrites:
                             if isinstance(target, discord.Member) and not target.bot:
@@ -293,8 +299,7 @@ async def check_inactive_tickets():
                                 description=(
                                     f"مرحباً {ticket_owner.mention} 👋\n\n"
                                     f"لاحظنا عدم وجود أي تفاعل في التذكرة منذ 24 ساعة.\n"
-                                    f"يرجى توضيح طلبك أو الرد للربط مع فريق الدعم والإدارة.\n"
-                                    f"في حال تم قضاء طلبك، يمكنك إغلاق التذكرة عبر الزر في الأعلى."
+                                    f"يرجى توضيح طلبك أو الرد للربط مع فريق الدعم والإدارة."
                                 ),
                                 color=discord.Color.orange()
                             )
@@ -708,7 +713,7 @@ class TicketSetupView(discord.ui.View):
             if role.permissions.administrator:
                 overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
 
-        # اختيار الكاتيجوري من الإعدادات
+        # اختيار الكاتيجوري المحدد
         cat_id = config.get(category_key)
         category = guild.get_channel(cat_id) if cat_id else None
 
