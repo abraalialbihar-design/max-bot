@@ -6,9 +6,23 @@ import random
 import hashlib
 import asyncio
 import discord
-from datetime import timedelta
+from io import BytesIO
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
+
+# لإرسال الفاتورة كصورة: pip install Pillow arabic-reshaper python-bidi
+try:
+    from PIL import Image, ImageDraw, ImageFont
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
+
+try:
+    import arabic_reshaper
+    from bidi.algorithm import get_display
+    ARABIC_SUPPORT = True
+except ImportError:
+    ARABIC_SUPPORT = False
 
 load_dotenv()
 
@@ -98,26 +112,6 @@ def parse_amount(text: str):
         val *= 1_000_000_000
 
     return val if val > 0 else None
-
-
-def parse_time(time_str: str):
-    if not time_str or len(time_str) < 2:
-        return None
-    unit = time_str[-1].lower()
-    try:
-        val = int(time_str[:-1])
-    except ValueError:
-        return None
-
-    if unit == "s":
-        return val
-    elif unit == "m":
-        return val * 60
-    elif unit == "h":
-        return val * 3600
-    elif unit == "d":
-        return val * 86400
-    return None
 
 
 # =========================================================
@@ -371,6 +365,79 @@ async def on_message(message: discord.Message):
 
 
 # =========================================================
+# ============ 🧾 توليد صورة الفاتورة (Invoice Image) =======
+# =========================================================
+
+def _fix_arabic(text: str) -> str:
+    """يعالج تشكيل واتجاه الحروف العربية عند الرسم على الصورة (يتطلب arabic_reshaper و python-bidi)."""
+    if not ARABIC_SUPPORT or not text:
+        return text
+    try:
+        reshaped = arabic_reshaper.reshape(text)
+        return get_display(reshaped)
+    except Exception:
+        return text
+
+
+def _load_font(size: int, bold: bool = False):
+    candidates = [
+        "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Bold.ttf" if bold else "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                return ImageFont.truetype(path, size)
+            except Exception:
+                continue
+    return ImageFont.load_default()
+
+
+def generate_invoice_image(inv_id: int, buyer_name: str, seller_name: str, product: str, amount: str, date_str: str) -> BytesIO:
+    width, height = 700, 460
+    bg_color = (24, 25, 28)
+    card_color = (47, 49, 54)
+    gold = (212, 175, 55)
+    white = (235, 235, 235)
+    gray = (150, 152, 158)
+
+    img = Image.new("RGB", (width, height), bg_color)
+    draw = ImageDraw.Draw(img)
+    draw.rounded_rectangle([20, 20, width - 20, height - 20], radius=20, fill=card_color)
+
+    title_font = _load_font(30, bold=True)
+    id_font = _load_font(16)
+    label_font = _load_font(18, bold=True)
+    value_font = _load_font(18)
+    footer_font = _load_font(13)
+
+    draw.text((width / 2, 65), _fix_arabic("فاتورة شراء إلكترونية"), font=title_font, fill=gold, anchor="mm")
+    draw.text((width / 2, 100), f"#{inv_id}", font=id_font, fill=gray, anchor="mm")
+    draw.line([(50, 130), (width - 50, 130)], fill=(70, 72, 78), width=1)
+
+    fields = [
+        (_fix_arabic("العميل"), buyer_name),
+        (_fix_arabic("البائع / الموظف"), seller_name),
+        (_fix_arabic("المنتج / الخدمة"), _fix_arabic(product)),
+        (_fix_arabic("المبلغ المدفوع"), amount),
+        (_fix_arabic("التاريخ"), date_str),
+    ]
+
+    y = 165
+    for label, value in fields:
+        draw.text((width - 60, y), label, font=label_font, fill=gray, anchor="ra")
+        draw.text((width - 60, y + 28), str(value), font=value_font, fill=white, anchor="ra")
+        y += 60
+
+    draw.text((width / 2, height - 32), "Axion Store Invoice", font=footer_font, fill=gray, anchor="mm")
+
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+
+# =========================================================
 # ==================== الأوامر الكاملة =====================
 # =========================================================
 
@@ -405,13 +472,11 @@ async def delivery_timer(ctx: commands.Context, hours: int = 24):
     try: await ctx.message.delete()
     except Exception: pass
 
-    target_time = discord.utils.utcnow() + timedelta(hours=hours)
     embed = discord.Embed(
         title="⏱️ مؤقت تسليم الطلب (Delivery Timer)",
         description=(
             f"تم بدء عداد تسليم الطلب للعميل.\n\n"
-            f"⏳ **المدة المحددة:** `{hours}` ساعة\n"
-            f"🎯 **موعد التسليم المتوقع:** <t:{int(target_time.timestamp())}:F> (<t:{int(target_time.timestamp())}:R>)"
+            f"⏳ **المدة المحددة:** `{hours}` ساعة"
         ),
         color=discord.Color.blue()
     )
@@ -458,18 +523,32 @@ async def create_invoice(ctx: commands.Context, buyer: discord.Member, amount: s
     except Exception: pass
 
     inv_id = random.randint(100000, 999999)
-    embed = discord.Embed(
-        title=f"🧾 فاتورة شراء إلكترونية #{inv_id}",
-        color=discord.Color.gold()
-    )
-    embed.add_field(name="👤 العميل", value=buyer.mention, inline=True)
-    embed.add_field(name="👑 البائع / الموظف", value=ctx.author.mention, inline=True)
-    embed.add_field(name="🛍️ المنتج / الخدمة", value=f"`{product}`", inline=False)
-    embed.add_field(name="💰 المبلغ المدفوع", value=f"`{amount}`", inline=True)
-    embed.add_field(name="📅 التاريخ", value=f"<t:{int(ctx.message.created_at.timestamp())}:D>", inline=True)
-    embed.set_footer(text=f"{ctx.guild.name} • Axion Store Invoice", icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
+    date_str = f"{ctx.message.created_at:%Y-%m-%d}"
 
-    await ctx.send(embed=embed)
+    if PIL_AVAILABLE:
+        image_buf = generate_invoice_image(
+            inv_id,
+            buyer.display_name,
+            ctx.author.display_name,
+            product,
+            amount,
+            date_str
+        )
+        file = discord.File(image_buf, filename=f"invoice_{inv_id}.png")
+        await ctx.send(content=f"{buyer.mention}", file=file)
+    else:
+        # مكتبة Pillow غير مثبتة على السيرفر (pip install Pillow arabic-reshaper python-bidi) → نرجع للإيمبد كخطة بديلة
+        embed = discord.Embed(
+            title=f"🧾 فاتورة شراء إلكترونية #{inv_id}",
+            color=discord.Color.gold()
+        )
+        embed.add_field(name="👤 العميل", value=buyer.mention, inline=True)
+        embed.add_field(name="👑 البائع / الموظف", value=ctx.author.mention, inline=True)
+        embed.add_field(name="🛍️ المنتج / الخدمة", value=f"`{product}`", inline=False)
+        embed.add_field(name="💰 المبلغ المدفوع", value=f"`{amount}`", inline=True)
+        embed.add_field(name="📅 التاريخ", value=f"<t:{int(ctx.message.created_at.timestamp())}:D>", inline=True)
+        embed.set_footer(text=f"{ctx.guild.name} • Axion Store Invoice", icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
+        await ctx.send(embed=embed)
 
 
 # ---------- 📊 فحص الدعوات (+invites) ----------
@@ -542,47 +621,6 @@ async def set_support_category(ctx: commands.Context, category_id: int):
     config["support_category_id"] = category.id
     save_config(config)
     await ctx.reply(f"✅ **تم اعتماد الكاتيجوري `{category.name}` لتذاكر الدعم الفني.**", mention_author=False)
-
-
-# =========================================================
-# ================= 🔔 نظام التذكير والتنبيهات =============
-# =========================================================
-
-@bot.command(name="remind")
-async def remind_command(ctx: commands.Context, duration: str = None, *, reminder_text: str = None):
-    if not duration or not reminder_text:
-        await ctx.reply("⚠️ **طريقة الاستخدام:**\n`+remind 30m تجديد السيرفر`", mention_author=False)
-        return
-
-    seconds = parse_time(duration)
-    if seconds is None or seconds <= 0:
-        await ctx.reply("⚠️ **صيغة الوقت غير صحيحة!** استخدم: `s`, `m`, `h`, `d` (مثال: `30m`).", mention_author=False)
-        return
-
-    try:
-        await ctx.message.delete()
-    except Exception:
-        pass
-
-    remind_time = discord.utils.utcnow() + timedelta(seconds=seconds)
-    await ctx.send(
-        f"⏰ {ctx.author.mention} **تم ضبط التذكير بنجاح!**\n"
-        f"📌 **المهمة:** `{reminder_text}`\n"
-        f"⏳ **موعد التنبيه:** <t:{int(remind_time.timestamp())}:R>",
-        delete_after=10
-    )
-
-    await asyncio.sleep(seconds)
-
-    embed = discord.Embed(
-        title="🔔 **تنبيه وتذكير!**",
-        description=f"مرحباً {ctx.author.mention} 👋\n\n📌 **موضوع التذكير:**\n```{reminder_text}```",
-        color=EMBED_COLOR
-    )
-    embed.set_footer(text=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
-    embed.timestamp = discord.utils.utcnow()
-
-    await ctx.channel.send(content=f"🔔 {ctx.author.mention}", embed=embed)
 
 
 @tasks.loop(hours=1)
@@ -750,7 +788,6 @@ async def help_command(ctx: commands.Context):
         name="👑 الأوامر الإدارية العامة",
         value=(
             "`+clear <عدد>` • تنظيف ومسح الرسائل\n"
-            "`+remind <الوقت> <النص>` • ضبط تذكير مخصص\n"
             "`+lock` / `+unlock` • قفل أو فتح القناة\n"
             "`+cus <@العضو>` • منح رتبة العميل فوراً\n"
             "`+come <@العضو>` • استدعاء عضو إلى القناة\n"
