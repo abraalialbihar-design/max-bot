@@ -16,7 +16,7 @@ CONFIG_FILE = "config.json"
 # ==== الإعدادات الأساسية ====
 DEFAULT_WELCOME_CHANNEL_ID = 1526255263462461530
 DEFAULT_REVIEWS_CHANNEL_ID = 1513286580456919151
-CUSTOMER_ROLE_ID = 1530380565130514583  # رتبة العميل المحددة
+CUSTOMER_ROLE_ID = 1530380565130514583
 
 # ==== أيديات رتب التذاكر ====
 BUY_ROLE_ID = 1530380477377024200      # رتبة الشراء
@@ -26,7 +26,7 @@ SUPPORT_ROLE_ID = 1530413725578694746  # رتبة الدعم الفني
 ALLOWED_USER_ID = 1426552057984454817
 
 STAR_EMOJI = "⭐"
-EMBED_COLOR = discord.Color.from_rgb(47, 49, 54) # لون فاخر وراقي
+EMBED_COLOR = discord.Color.from_rgb(47, 49, 54)
 
 DEFAULT_PAYMENT_METHODS = {
     "مدار": "لايوجد",
@@ -66,12 +66,128 @@ if "payment_methods" not in config:
     config["payment_methods"] = DEFAULT_PAYMENT_METHODS
     save_config(config)
 
-intents = discord.Intents.default()
-intents.members = True
-intents.presences = True
-intents.message_content = True
 
-bot = commands.Bot(command_prefix="+", intents=intents, help_command=None)
+# =========================================================
+# ==================== كلاسات التذاكر ====================
+# =========================================================
+
+class TicketControlView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="إغلاق وحذف التذكرة", emoji="🔒", style=discord.ButtonStyle.danger, custom_id="close_ticket_btn")
+    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator and not interaction.channel.name.startswith(("buy-", "support-")):
+            await interaction.response.send_message("❌ **ليس لديك صلاحية لإغلاق هذه التذكرة.**", ephemeral=True)
+            return
+
+        await interaction.response.send_message("🔒 **تم إغلاق التذكرة. سيتم حذف القناة تلقائياً خلال 5 ثوانٍ...**")
+        
+        for target, overwrite in interaction.channel.overwrites.items():
+            if isinstance(target, discord.Member) and not target.bot:
+                overwrite.send_messages = False
+                try:
+                    await interaction.channel.set_permissions(target, overwrite=overwrite)
+                except Exception:
+                    pass
+        
+        await asyncio.sleep(5)
+        try:
+            await interaction.channel.delete()
+        except Exception:
+            pass
+
+
+class TicketSetupView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    async def _create_ticket_channel(self, interaction: discord.Interaction, prefix: str, title_msg: str, role_id: int, category_key: str):
+        guild = interaction.guild
+        member = interaction.user
+
+        existing_channel = discord.utils.get(guild.text_channels, name=f"{prefix}-{member.name.lower()[:8]}")
+        if existing_channel:
+            await interaction.response.send_message(f"❌ **لديك تذكرة مفتوحة بالفعل:** {existing_channel.mention}", ephemeral=True)
+            return
+
+        # إشعار سريع للمستخدم كما في الصورة
+        await interaction.response.send_message(f"✅ **تم إنشاء التذكرة بنجاح!**", ephemeral=True)
+
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            member: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True)
+        }
+
+        for role in guild.roles:
+            if role.permissions.administrator:
+                overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+
+        cat_id = config.get(category_key)
+        category = guild.get_channel(cat_id) if cat_id else None
+
+        if not category:
+            category = discord.utils.get(guild.categories, name="TICKETS")
+            if not category:
+                try:
+                    category = await guild.create_category("TICKETS")
+                except Exception:
+                    category = None
+
+        ticket_channel = await guild.create_text_channel(
+            name=f"{prefix}-{member.name[:8]}",
+            category=category,
+            overwrites=overwrites
+        )
+
+        embed = discord.Embed(
+            title=title_msg,
+            description=f"أهلاً بك {member.mention} 👋\nيرجى كتابة تفاصيل طلبك بوضوح وسيقوم الطاقم بالرد عليك فوراً.",
+            color=EMBED_COLOR
+        )
+        embed.set_footer(text=f"{guild.name} • Ticket System", icon_url=guild.icon.url if guild.icon else None)
+
+        mention_content = f"{member.mention} <@&{role_id}>"
+        await ticket_channel.send(content=mention_content, embed=embed, view=TicketControlView())
+
+    @discord.ui.button(
+        label="شراء منتج", 
+        emoji="🛒", 
+        style=discord.ButtonStyle.success, 
+        custom_id="persistent_buy_ticket"
+    )
+    async def buy_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._create_ticket_channel(interaction, "buy", "🛒 تذكرة شراء منتج", BUY_ROLE_ID, "buy_category_id")
+
+    @discord.ui.button(
+        label="الدعم الفنى", 
+        emoji="🛠️", 
+        style=discord.ButtonStyle.primary, 
+        custom_id="persistent_support_ticket"
+    )
+    async def support_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._create_ticket_channel(interaction, "support", "🛠️ تذكرة الدعم الفني والاستفسارات", SUPPORT_ROLE_ID, "support_category_id")
+
+
+# =========================================================
+# ===================== البوت الرئيسي =====================
+# =========================================================
+
+class CustomBot(commands.Bot):
+    def __init__(self):
+        intents = discord.Intents.default()
+        intents.members = True
+        intents.presences = True
+        intents.message_content = True
+        super().__init__(command_prefix="+", intents=intents, help_command=None)
+
+    async def setup_hook(self):
+        # تسييل الأزرار لتظل تعمل بعد إعادة التشغيل (Restart)
+        self.add_view(TicketSetupView())
+        self.add_view(TicketControlView())
+
+bot = CustomBot()
 
 
 # ---------- تقييد استخدام الأوامر العادية لمن يملك Administrator ----------
@@ -79,7 +195,7 @@ bot = commands.Bot(command_prefix="+", intents=intents, help_command=None)
 async def restrict_to_admin(ctx: commands.Context):
     if ctx.guild is None:
         return False
-    if ctx.command and ctx.command.name == "cv":
+    if ctx.command and ctx.command.name in ["cv", "close"]:
         return True
     return ctx.author.guild_permissions.administrator
 
@@ -104,12 +220,11 @@ async def on_ready():
     activity = discord.Game(name="DEV BY : D0JW")
     await bot.change_presence(activity=activity)
     
-    # بدء مهمة الفحص التلقائي للتذاكر الخاملة
     if not check_inactive_tickets.is_running():
         check_inactive_tickets.start()
 
 
-# ---------- دالة استخراج وتحويل المبالغ (دعم k, m, b) ----------
+# ---------- دالة استخراج وتحويل المبالغ ----------
 def parse_amount(text: str):
     cleaned = text.strip().replace(",", "").lower()
     match = re.match(r"^(\d+(?:\.\d+)?)\s*([kmb])?$", cleaned)
@@ -204,6 +319,33 @@ async def on_message(message: discord.Message):
 
 
 # =========================================================
+# ==================== أمر إغلاق التذكرة (+close) =================
+# =========================================================
+
+@bot.command(name="close")
+async def close_ticket_cmd(ctx: commands.Context):
+    if not ctx.channel.name.startswith(("buy-", "support-")):
+        await ctx.reply("❌ **هذا الأمر يستخدم فقط داخل قنوات التذاكر.**", mention_author=False)
+        return
+
+    await ctx.send("🔒 **تم إغلاق التذكرة. سيتم حذف القناة تلقائياً خلال 5 ثوانٍ...**")
+    
+    for target, overwrite in ctx.channel.overwrites.items():
+        if isinstance(target, discord.Member) and not target.bot:
+            overwrite.send_messages = False
+            try:
+                await ctx.channel.set_permissions(target, overwrite=overwrite)
+            except Exception:
+                pass
+    
+    await asyncio.sleep(5)
+    try:
+        await ctx.channel.delete()
+    except Exception:
+        pass
+
+
+# =========================================================
 # ================= ⚙️ إعدادات الكاتيجوري (+bnm / +dfg) =======
 # =========================================================
 
@@ -235,7 +377,6 @@ async def set_support_category(ctx: commands.Context, category_id: int):
 # ================= 🔔 نظام التذكير والتنبيهات =============
 # =========================================================
 
-# --- أمر التذكير المخصص ---
 @bot.command(name="remind")
 async def remind_command(ctx: commands.Context, duration: str = None, *, reminder_text: str = None):
     if not duration or not reminder_text:
@@ -273,7 +414,6 @@ async def remind_command(ctx: commands.Context, duration: str = None, *, reminde
     await ctx.channel.send(content=f"🔔 {ctx.author.mention}", embed=embed)
 
 
-# --- مهمة التذكير الآلي للتذاكر الخاملة (كل ساعة) ---
 @tasks.loop(hours=1)
 async def check_inactive_tickets():
     now = discord.utils.utcnow()
@@ -452,6 +592,7 @@ async def help_command(ctx: commands.Context):
         name="🛍️ إعدادات المتجر والتذاكر",
         value=(
             "`+panel` • إرسال لوحة فتح التذاكر\n"
+            "`+close` • إغلاق التذكرة الحالية\n"
             "`+bnm <ID>` • تعيين كاتيجوري تذاكر الشراء\n"
             "`+dfg <ID>` • تعيين كاتيجوري تذاكر الدعم الفني\n"
             "`+setpay` • إعداد وتحديث طرق الدفع\n"
@@ -478,16 +619,12 @@ async def help_command(ctx: commands.Context):
     await ctx.reply(embed=embed, mention_author=False)
 
 
-# ---------- +tax (تحديد روم الضريبة) ----------
+# ---------- +tax ----------
 @bot.command(name="tax", aliases=["tax-setup"])
 async def tax_setup(ctx: commands.Context):
     config["tax_channel_id"] = ctx.channel.id
     save_config(config)
-    
-    await ctx.reply(
-        f"✅ **تم اعتماد قناة {ctx.channel.mention} لحساب الضريبة تلقائياً.**",
-        mention_author=False
-    )
+    await ctx.reply(f"✅ **تم اعتماد قناة {ctx.channel.mention} لحساب الضريبة تلقائياً.**", mention_author=False)
 
 
 # ---------- +ping ----------
@@ -530,7 +667,6 @@ async def font_text(ctx: commands.Context, *, text: str):
         color=EMBED_COLOR
     )
     embed.set_footer(text=f"طلب بواسطة: {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
-    
     await ctx.send(embed=embed)
 
 
@@ -658,107 +794,8 @@ async def pay_command(ctx: commands.Context):
 
 
 # =========================================================
-# ===================== نظام التذاكر ======================
+# ================= لوحة التذاكر (+panel) ==================
 # =========================================================
-
-class TicketControlView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="إغلاق وحذف التذكرة", emoji="🔒", style=discord.ButtonStyle.danger, custom_id="close_ticket")
-    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.user.guild_permissions.administrator and not interaction.channel.name.endswith(str(interaction.user.id)[-4:]):
-            await interaction.response.send_message("❌ **ليس لديك صلاحية لإغلاق هذه التذكرة.**", ephemeral=True)
-            return
-
-        await interaction.response.send_message("🔒 **تم إغلاق التذكرة. سيتم حذف القناة تلقائياً خلال 5 ثوانٍ...**")
-        
-        for target, overwrite in interaction.channel.overwrites.items():
-            if isinstance(target, discord.Member) and not target.bot:
-                overwrite.send_messages = False
-                try:
-                    await interaction.channel.set_permissions(target, overwrite=overwrite)
-                except Exception:
-                    pass
-        
-        await asyncio.sleep(5)
-        try:
-            await interaction.channel.delete()
-        except Exception:
-            pass
-
-
-class TicketSetupView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    async def _create_ticket_channel(self, interaction: discord.Interaction, prefix: str, title_msg: str, role_id: int, category_key: str):
-        guild = interaction.guild
-        member = interaction.user
-
-        existing_channel = discord.utils.get(guild.text_channels, name=f"{prefix}-{member.name.lower()[:8]}")
-        if existing_channel:
-            await interaction.response.send_message(f"❌ **لديك تذكرة مفتوحة بالفعل:** {existing_channel.mention}", ephemeral=True)
-            return
-
-        await interaction.response.send_message("⏳ **جاري إنشاء التذكرة الخاص بك...**", ephemeral=True)
-
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            member: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
-            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True)
-        }
-
-        for role in guild.roles:
-            if role.permissions.administrator:
-                overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
-
-        # اختيار الكاتيجوري المحدد
-        cat_id = config.get(category_key)
-        category = guild.get_channel(cat_id) if cat_id else None
-
-        if not category:
-            category = discord.utils.get(guild.categories, name="TICKETS")
-            if not category:
-                try:
-                    category = await guild.create_category("TICKETS")
-                except Exception:
-                    category = None
-
-        ticket_channel = await guild.create_text_channel(
-            name=f"{prefix}-{member.name[:8]}",
-            category=category,
-            overwrites=overwrites
-        )
-
-        embed = discord.Embed(
-            title=title_msg,
-            description=f"أهلاً بك {member.mention} 👋\nيرجى كتابة تفاصيل طلبك بوضوح وسيقوم الطاقم بالرد عليك فوراً.",
-            color=EMBED_COLOR
-        )
-        embed.set_footer(text=f"{guild.name} • Ticket System", icon_url=guild.icon.url if guild.icon else None)
-
-        mention_content = f"{member.mention} <@&{role_id}>"
-        await ticket_channel.send(content=mention_content, embed=embed, view=TicketControlView())
-
-    @discord.ui.button(
-        label="شراء منتج", 
-        emoji="🛒", 
-        style=discord.ButtonStyle.success, 
-        custom_id="buy_ticket"
-    )
-    async def buy_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._create_ticket_channel(interaction, "buy", "🛒 تذكرة شراء منتج", BUY_ROLE_ID, "buy_category_id")
-
-    @discord.ui.button(
-        label="الدعم الفنى", 
-        emoji="🛠️", 
-        style=discord.ButtonStyle.primary, 
-        custom_id="support_ticket"
-    )
-    async def support_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._create_ticket_channel(interaction, "support", "🛠️ تذكرة الدعم الفني والاستفسارات", SUPPORT_ROLE_ID, "support_category_id")
-
 
 @bot.command(name="panel")
 async def panel_command(ctx: commands.Context):
@@ -767,18 +804,17 @@ async def panel_command(ctx: commands.Context):
     except Exception:
         pass
 
+    # رسالة الشرح المطلوبة مثل الصورة
     embed = discord.Embed(
-        title="🎫 مركز الشراء والدعم الفني",
+        title="📋 كيف يعمل",
         description=(
-            "يرجى الضغط على الزر المناسب لفتح تذكرة مع فريق الإدارة:\n\n"
-            "🛒 **شراء منتج**\n"
-            "• للشراء أو الاستفسار عن تفاصيل والأسعار.\n\n"
-            "🛠️ **الدعم الفني**\n"
-            "• للمشاكل التقنية، والاستفسارات العامة."
+            "**1** اختر القسم من القائمة\n"
+            "**2** املاً النموذج\n"
+            "**3** انتظر رد الموظفين"
         ),
-        color=EMBED_COLOR
+        color=discord.Color.green()
     )
-    embed.set_footer(text="DEV BY : @D0JW")
+    embed.set_footer(text=f"فريق الدعم | {discord.utils.utcnow().strftime('%m/%d/%y, %I:%M %p')}")
 
     await ctx.send(embed=embed, view=TicketSetupView())
 
