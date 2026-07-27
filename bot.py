@@ -108,11 +108,8 @@ class TicketSetupView(discord.ui.View):
 
         existing_channel = discord.utils.get(guild.text_channels, name=f"{prefix}-{member.name.lower()[:8]}")
         if existing_channel:
-            await interaction.response.send_message(f"❌ **لديك تذكرة مفتوحة بالفعل:** {existing_channel.mention}", ephemeral=True)
+            await interaction.response.send_message(f"✅ **تم إنشاء التذكرة بنجاح!** {existing_channel.mention}", ephemeral=True)
             return
-
-        # إشعار سريع للمستخدم كما في الصورة
-        await interaction.response.send_message(f"✅ **تم إنشاء التذكرة بنجاح!**", ephemeral=True)
 
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
@@ -140,6 +137,9 @@ class TicketSetupView(discord.ui.View):
             category=category,
             overwrites=overwrites
         )
+
+        # إرسال الرسالة المخفية للعضو كما في الصورة تماماً
+        await interaction.response.send_message(f"✅ **تم إنشاء التذكرة بنجاح!** {ticket_channel.mention}", ephemeral=True)
 
         embed = discord.Embed(
             title=title_msg,
@@ -183,7 +183,7 @@ class CustomBot(commands.Bot):
         super().__init__(command_prefix="+", intents=intents, help_command=None)
 
     async def setup_hook(self):
-        # تسييل الأزرار لتظل تعمل بعد إعادة التشغيل (Restart)
+        # تسجيل الأزرار للعمل المستمر حتى بعد الـ Restart
         self.add_view(TicketSetupView())
         self.add_view(TicketControlView())
 
@@ -794,7 +794,7 @@ async def pay_command(ctx: commands.Context):
 
 
 # =========================================================
-# ================= لوحة التذاكر (+panel) ==================
+# ================= لوحة التذاكر الأصليّة (+panel) ==================
 # =========================================================
 
 @bot.command(name="panel")
@@ -804,17 +804,18 @@ async def panel_command(ctx: commands.Context):
     except Exception:
         pass
 
-    # رسالة الشرح المطلوبة مثل الصورة
     embed = discord.Embed(
-        title="📋 كيف يعمل",
+        title="🎫 مركز الشراء والدعم الفني",
         description=(
-            "**1** اختر القسم من القائمة\n"
-            "**2** املاً النموذج\n"
-            "**3** انتظر رد الموظفين"
+            "يرجى الضغط على الزر المناسب لفتح تذكرة مع فريق الإدارة:\n\n"
+            "🛒 **شراء منتج**\n"
+            "• للشراء أو الاستفسار عن تفاصيل والأسعار.\n\n"
+            "🛠️ **الدعم الفني**\n"
+            "• للمشاكل التقنية، والاستفسارات العامة."
         ),
-        color=discord.Color.green()
+        color=EMBED_COLOR
     )
-    embed.set_footer(text=f"فريق الدعم | {discord.utils.utcnow().strftime('%m/%d/%y, %I:%M %p')}")
+    embed.set_footer(text="DEV BY : @D0JW")
 
     await ctx.send(embed=embed, view=TicketSetupView())
 
