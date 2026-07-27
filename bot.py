@@ -150,21 +150,11 @@ class TicketSetupView(discord.ui.View):
         mention_content = f"{member.mention} <@&{role_id}>"
         await ticket_channel.send(content=mention_content, embed=embed, view=TicketControlView())
 
-    @discord.ui.button(
-        label="شراء منتج", 
-        emoji="🛒", 
-        style=discord.ButtonStyle.success, 
-        custom_id="persistent_buy_ticket"
-    )
+    @discord.ui.button(label="شراء منتج", emoji="🛒", style=discord.ButtonStyle.success, custom_id="persistent_buy_ticket")
     async def buy_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._create_ticket_channel(interaction, "buy", "🛒 تذكرة شراء منتج", BUY_ROLE_ID, "buy_category_id")
 
-    @discord.ui.button(
-        label="الدعم الفنى", 
-        emoji="🛠️", 
-        style=discord.ButtonStyle.primary, 
-        custom_id="persistent_support_ticket"
-    )
+    @discord.ui.button(label="الدعم الفنى", emoji="🛠️", style=discord.ButtonStyle.primary, custom_id="persistent_support_ticket")
     async def support_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._create_ticket_channel(interaction, "support", "🛠️ تذكرة الدعم الفني والاستفسارات", SUPPORT_ROLE_ID, "support_category_id")
 
@@ -270,20 +260,13 @@ async def on_member_join(member: discord.Member):
 
     embed = discord.Embed(
         title="✨ أهلاً بك في السيرفر ✨",
-        description=(
-            f"مرحباً بك {member.mention} في **{member.guild.name}** 🌸\n"
-            f"نتمنى لك أوقاتاً ممتعة وتجربة رائعة معنا!"
-        ),
+        description=f"مرحباً بك {member.mention} في **{member.guild.name}** 🌸\nنتمنى لك أوقاتاً ممتعة وتجربة رائعة معنا!",
         color=EMBED_COLOR
     )
     embed.set_thumbnail(url=member.display_avatar.url)
     embed.add_field(name="👤 العضو", value=member.mention, inline=True)
     embed.add_field(name="📊 الترتيب", value=f"**#{member.guild.member_count}**", inline=True)
-    embed.add_field(
-        name="📅 إنشاء الحساب",
-        value=f"<t:{int(member.created_at.timestamp())}:R>",
-        inline=True,
-    )
+    embed.add_field(name="📅 إنشاء الحساب", value=f"<t:{int(member.created_at.timestamp())}:R>", inline=True)
     embed.set_footer(text=f"{member.guild.name} • Welcome System", icon_url=member.guild.icon.url if member.guild.icon else None)
     embed.timestamp = discord.utils.utcnow()
 
@@ -562,7 +545,188 @@ async def give_customer_role(ctx: commands.Context, member: discord.Member):
 
 
 # =========================================================
-# ========================  +help  ========================
+# ===================== أوامر الـ Say =====================
+# =========================================================
+
+@bot.command(name="say")
+async def say(ctx: commands.Context, *, message: str):
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+    await ctx.send(message)
+
+
+@bot.command(name="say-embed")
+async def say_embed(ctx: commands.Context, *, message: str):
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+    
+    embed = discord.Embed(description=message, color=EMBED_COLOR)
+    await ctx.send(embed=embed)
+
+
+# =========================================================
+# =================== نظام البرودكاست ====================
+# =========================================================
+
+async def _send_broadcast(ctx: commands.Context, members: list, message: str, label: str):
+    status_msg = await ctx.reply(f"⏳ **جاري بدء إرسال {label} لـ {len(members)} عضو...**", mention_author=False)
+
+    sent, failed = 0, 0
+    embed = discord.Embed(
+        title=f"📢 إعلان رسمي من {ctx.guild.name}",
+        description=message,
+        color=EMBED_COLOR
+    )
+    embed.set_footer(text=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
+
+    for member in members:
+        if member.bot:
+            continue
+        try:
+            await member.send(embed=embed)
+            sent += 1
+        except Exception:
+            failed += 1
+        await asyncio.sleep(1)
+
+    await status_msg.edit(
+        content=(
+            f"✅ **انتهى الإرسال بنجاح!**\n"
+            f"• تم الإرسال إلى: **{sent}**\n"
+            f"• تعذر الإرسال إلى: **{failed}**"
+        )
+    )
+
+
+@bot.command(name="bc")
+async def bc_single(ctx: commands.Context, member: discord.Member, *, message: str):
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+
+    embed = discord.Embed(
+        title=f"📢 رسالة خاصة من إدارة {ctx.guild.name}",
+        description=message,
+        color=EMBED_COLOR
+    )
+    embed.set_footer(text=f"بواسطة: {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
+
+    try:
+        await member.send(embed=embed)
+        await ctx.send(f"✅ **تم إرسال البرودكاست إلى {member.mention} بنجاح.**", delete_after=5)
+    except discord.Forbidden:
+        await ctx.send(f"❌ **تعذر الإرسال لـ {member.mention} (الخاص مقفل).**", delete_after=5)
+
+
+@bot.command(name="bcall")
+async def bcall(ctx: commands.Context, *, message: str):
+    await _send_broadcast(ctx, ctx.guild.members, message, "البرودكاست العام")
+
+
+@bot.command(name="bc-role")
+async def bc_role(ctx: commands.Context, role: discord.Role, *, message: str):
+    await _send_broadcast(ctx, role.members, message, f"برودكاست رتبة {role.name}")
+
+
+@bot.command(name="bc_online")
+async def bc_online(ctx: commands.Context, *, message: str):
+    members = [m for m in ctx.guild.members if m.status != discord.Status.offline]
+    await _send_broadcast(ctx, members, message, "برودكاست المتواجدين أونلاين")
+
+
+# =========================================================
+# ==================== نظام التقييمات: +rate ==================
+# =========================================================
+
+class RateModal(discord.ui.Modal, title="تقييم الخدمة"):
+    rating = discord.ui.TextInput(label="التقييم (من 1 إلى 5)", placeholder="5", max_length=1, required=True)
+    comment = discord.ui.TextInput(label="رأيك بالخدمة", style=discord.TextStyle.paragraph, placeholder="اكتب انطباعك هنا...", required=True, max_length=300)
+
+    def __init__(self, seller: discord.Member, buyer: discord.Member, product: str, view: "RateView"):
+        super().__init__()
+        self.seller = seller
+        self.buyer = buyer
+        self.product = product
+        self.rate_view = view
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            stars_count = int(self.rating.value)
+            stars_count = max(1, min(5, stars_count))
+        except ValueError:
+            stars_count = 5
+
+        stars = STAR_EMOJI * stars_count
+
+        embed = discord.Embed(
+            title="⭐ تقييم جديد لخدمة",
+            description=(
+                f"**تم التقييم بواسطة:** {self.buyer.mention}\n\n"
+                f"👤 **البائع:** {self.seller.mention}\n"
+                f"🛍️ **المنتج:** `{self.product}`\n\n"
+                f"🌟 **التقييم:** {stars}\n\n"
+                f"💬 **التعليق:**\n```{self.comment.value}```"
+            ),
+            color=EMBED_COLOR
+        )
+        embed.set_footer(text=interaction.guild.name, icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
+        embed.timestamp = discord.utils.utcnow()
+
+        reviews_channel_id = config.get("reviews_channel_id", DEFAULT_REVIEWS_CHANNEL_ID)
+        reviews_channel = interaction.guild.get_channel(reviews_channel_id)
+
+        if reviews_channel:
+            await reviews_channel.send(embed=embed)
+            await interaction.response.send_message("✅ **شكراً لك! تم إرسال تقييمك بنجاح.**", ephemeral=True)
+        else:
+            await interaction.response.send_message("⚠️ **لم يتم العثور على قناة التقييمات.**", ephemeral=True)
+
+        self.rate_view.rate_button.disabled = True
+        self.rate_view.rate_button.label = "تم التقييم بنجاح ✅"
+        try:
+            await interaction.message.edit(view=self.rate_view)
+        except Exception:
+            pass
+
+
+class RateView(discord.ui.View):
+    def __init__(self, seller: discord.Member, buyer: discord.Member, product: str):
+        super().__init__(timeout=None)
+        self.seller = seller
+        self.buyer = buyer
+        self.product = product
+
+    @discord.ui.button(label="اضغط لتقييم الخدمة", style=discord.ButtonStyle.success, emoji="⭐", custom_id="rate_service_btn")
+    async def rate_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.buyer.id:
+            await interaction.response.send_message("❌ **هذا التقييم مخصص للمشتري فقط.**", ephemeral=True)
+            return
+        await interaction.response.send_modal(RateModal(self.seller, self.buyer, self.product, self))
+
+
+@bot.command(name="rate")
+async def rate_prefix(ctx: commands.Context, buyer: discord.Member, *, product: str):
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+        
+    view = RateView(seller=ctx.author, buyer=buyer, product=product)
+    
+    embed = discord.Embed(
+        description=f"{buyer.mention} 👋 **شكراً لثقتك بنا!**\nنتمنى منك مشاركة رأيك وتقييم الخدمة عبر الزر أدناه.",
+        color=EMBED_COLOR
+    )
+    await ctx.send(embed=embed, view=view)
+
+
+# =========================================================
+# ========================   +help   ========================
 # =========================================================
 
 @bot.command(name="help")
@@ -815,177 +979,6 @@ async def panel_command(ctx: commands.Context):
     embed.set_footer(text="DEV BY : @D0JW")
 
     await ctx.send(embed=embed, view=TicketSetupView())
-
-
-# =========================================================
-# ================= نظام التقييمات: +rate ==================
-# =========================================================
-
-class RateModal(discord.ui.Modal, title="تقييم الخدمة"):
-    rating = discord.ui.TextInput(label="التقييم (من 1 إلى 5)", placeholder="5", max_length=1, required=True)
-    comment = discord.ui.TextInput(label="رأيك بالخدمة", style=discord.TextStyle.paragraph, placeholder="اكتب انطباعك هنا...", required=True, max_length=300)
-
-    def __init__(self, seller: discord.Member, buyer: discord.Member, product: str, view: "RateView"):
-        super().__init__()
-        self.seller = seller
-        self.buyer = buyer
-        self.product = product
-        self.rate_view = view
-
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            stars_count = int(self.rating.value)
-            stars_count = max(1, min(5, stars_count))
-        except ValueError:
-            stars_count = 5
-
-        stars = STAR_EMOJI * stars_count
-
-        embed = discord.Embed(
-            description=(
-                f"**تم التقييم بواسطة:** {self.buyer.mention}\n\n"
-                f"👤 **البائع:** {self.seller.mention}\n"
-                f"🛍️ **المنتج:** `{self.product}`\n\n"
-                f"🌟 **التقييم:** {stars}\n\n"
-                f"💬 **التعليق:**\n```{self.comment.value}```"
-            ),
-            color=EMBED_COLOR
-        )
-        embed.set_footer(text="نظام التقييمات المعتمد")
-        embed.timestamp = discord.utils.utcnow()
-
-        reviews_channel_id = config.get("reviews_channel_id", DEFAULT_REVIEWS_CHANNEL_ID)
-        reviews_channel = bot.get_channel(reviews_channel_id)
-        if reviews_channel:
-            await reviews_channel.send(embed=embed)
-            await interaction.response.send_message("✅ **شكراً جزيلاً على تقييمك!**", ephemeral=True)
-        else:
-            await interaction.response.send_message("⚠️ **لم يتم العثور على قناة التقييمات.**", ephemeral=True)
-
-        self.rate_view.rate_button.disabled = True
-        self.rate_view.rate_button.label = "تم التقييم بنجاح ✅"
-        await interaction.message.edit(view=self.rate_view)
-
-
-class RateView(discord.ui.View):
-    def __init__(self, seller: discord.Member, buyer: discord.Member, product: str):
-        super().__init__(timeout=None)
-        self.seller = seller
-        self.buyer = buyer
-        self.product = product
-
-    @discord.ui.button(label="اضغط لتقييم الخدمة", style=discord.ButtonStyle.success, emoji="⭐")
-    async def rate_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.buyer.id:
-            await interaction.response.send_message("❌ **هذا التقييم مخصص للمشتري فقط.**", ephemeral=True)
-            return
-        await interaction.response.send_modal(RateModal(self.seller, self.buyer, self.product, self))
-
-
-@bot.command(name="rate")
-async def rate_prefix(ctx: commands.Context, buyer: discord.Member, *, product: str):
-    view = RateView(seller=ctx.author, buyer=buyer, product=product)
-    
-    embed = discord.Embed(
-        description=f"{buyer.mention} 👋 **شكراً لثقتك بنا!**\nنتمنى منك مشاركة رأيك وتقييم الخدمة عبر الزر أدناه.",
-        color=EMBED_COLOR
-    )
-    await ctx.send(embed=embed, view=view)
-
-
-# =========================================================
-# ==================== أوامر الـ Say =====================
-# =========================================================
-
-@bot.command(name="say")
-async def say(ctx: commands.Context, *, message: str):
-    try:
-        await ctx.message.delete()
-    except Exception:
-        pass
-    await ctx.send(message)
-
-
-@bot.command(name="say-embed")
-async def say_embed(ctx: commands.Context, *, message: str):
-    try:
-        await ctx.message.delete()
-    except Exception:
-        pass
-    
-    embed = discord.Embed(description=message, color=EMBED_COLOR)
-    await ctx.send(embed=embed)
-
-
-# =========================================================
-# =================== نظام البرودكاست ====================
-# =========================================================
-
-async def _send_broadcast(ctx: commands.Context, members: list, message: str, label: str):
-    status_msg = await ctx.reply(f"⏳ **جاري بدء إرسال {label} لـ {len(members)} عضو...**", mention_author=False)
-
-    sent, failed = 0, 0
-    embed = discord.Embed(
-        title=f"📢 إعلان رسمي من {ctx.guild.name}",
-        description=message,
-        color=EMBED_COLOR
-    )
-    embed.set_footer(text=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
-
-    for member in members:
-        if member.bot:
-            continue
-        try:
-            await member.send(embed=embed)
-            sent += 1
-        except Exception:
-            failed += 1
-        await asyncio.sleep(1)
-
-    await status_msg.edit(
-        content=(
-            f"✅ **انتهى الإرسال بنجاح!**\n"
-            f"• تم الإرسال إلى: **{sent}**\n"
-            f"• تعذر الإرسال إلى: **{failed}**"
-        )
-    )
-
-
-@bot.command(name="bc")
-async def bc_single(ctx: commands.Context, member: discord.Member, *, message: str):
-    try:
-        await ctx.message.delete()
-    except Exception:
-        pass
-
-    embed = discord.Embed(
-        title=f"📢 رسالة خاصة من إدارة {ctx.guild.name}",
-        description=message,
-        color=EMBED_COLOR
-    )
-    embed.set_footer(text=f"بواسطة: {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
-
-    try:
-        await member.send(embed=embed)
-        await ctx.send(f"✅ **تم إرسال البرودكاست إلى {member.mention} بنجاح.**", delete_after=5)
-    except discord.Forbidden:
-        await ctx.send(f"❌ **تعذر الإرسال لـ {member.mention} (الخاص مقفل).**", delete_after=5)
-
-
-@bot.command(name="bcall")
-async def bcall(ctx: commands.Context, *, message: str):
-    await _send_broadcast(ctx, ctx.guild.members, message, "البرودكاست العام")
-
-
-@bot.command(name="bc-role")
-async def bc_role(ctx: commands.Context, role: discord.Role, *, message: str):
-    await _send_broadcast(ctx, role.members, message, f"برودكاست رتبة {role.name}")
-
-
-@bot.command(name="bc_online")
-async def bc_online(ctx: commands.Context, *, message: str):
-    members = [m for m in ctx.guild.members if m.status != discord.Status.offline]
-    await _send_broadcast(ctx, members, message, "برودكاست المتواجدين أونلاين")
 
 
 if TOKEN:
