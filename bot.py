@@ -526,8 +526,11 @@ async def create_invoice(ctx: commands.Context, buyer: discord.Member, amount: s
     inv_id = random.randint(100000, 999999)
     date_str = f"{ctx.message.created_at:%Y-%m-%d}"
 
-    # الفاتورة تُرسل دائماً في نفس القناة التي كُتب فيها الأمر
-    target_channel = ctx.channel
+    # ترسل الفاتورة إلى قناة الفواتير المحددة (+iop أو +sal)، وإن لم تكن معينة تُرسل في نفس القناة
+    invoice_channel_id = config.get("invoice_channel_id")
+    target_channel = ctx.guild.get_channel(invoice_channel_id) if invoice_channel_id else None
+    if target_channel is None:
+        target_channel = ctx.channel
 
     if PIL_AVAILABLE:
         image_buf = generate_invoice_image(
@@ -553,6 +556,9 @@ async def create_invoice(ctx: commands.Context, buyer: discord.Member, amount: s
         embed.add_field(name="📅 التاريخ", value=f"<t:{int(ctx.message.created_at.timestamp())}:D>", inline=True)
         embed.set_footer(text=f"{ctx.guild.name} • Axion Store Invoice", icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
         await target_channel.send(embed=embed)
+
+    if target_channel.id != ctx.channel.id:
+        await ctx.send(f"✅ **تم إرسال الفاتورة إلى {target_channel.mention}**", delete_after=5)
 
 
 # ---------- 📊 فحص الدعوات (+invites) ----------
