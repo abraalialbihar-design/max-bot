@@ -299,8 +299,10 @@ class InvoiceView(discord.ui.View):
                 item.label = "تم تأكيد الاستلام ✅"
                 item.emoji = None
 
+        updated_embed = build_invoice_embed(self.inv_id, record, interaction.guild)
+
         try:
-            await interaction.response.edit_message(view=self)
+            await interaction.response.edit_message(embed=updated_embed, view=self)
         except Exception:
             pass
 
