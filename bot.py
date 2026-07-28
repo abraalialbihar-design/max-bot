@@ -79,6 +79,7 @@ def load_config():
         "tax_channel_id": None,
         "buy_category_id": None,
         "support_category_id": None,
+        "invoice_channel_id": None,
         "payment_methods": DEFAULT_PAYMENT_METHODS
     }
 
@@ -525,6 +526,11 @@ async def create_invoice(ctx: commands.Context, buyer: discord.Member, amount: s
     inv_id = random.randint(100000, 999999)
     date_str = f"{ctx.message.created_at:%Y-%m-%d}"
 
+    invoice_channel_id = config.get("invoice_channel_id")
+    target_channel = ctx.guild.get_channel(invoice_channel_id) if invoice_channel_id else ctx.channel
+    if target_channel is None:
+        target_channel = ctx.channel
+
     if PIL_AVAILABLE:
         image_buf = generate_invoice_image(
             inv_id,
@@ -535,7 +541,7 @@ async def create_invoice(ctx: commands.Context, buyer: discord.Member, amount: s
             date_str
         )
         file = discord.File(image_buf, filename=f"invoice_{inv_id}.png")
-        await ctx.send(content=f"{buyer.mention}", file=file)
+        await target_channel.send(content=f"{buyer.mention}", file=file)
     else:
         # مكتبة Pillow غير مثبتة على السيرفر (pip install Pillow arabic-reshaper python-bidi) → نرجع للإيمبد كخطة بديلة
         embed = discord.Embed(
@@ -548,7 +554,10 @@ async def create_invoice(ctx: commands.Context, buyer: discord.Member, amount: s
         embed.add_field(name="💰 المبلغ المدفوع", value=f"`{amount}`", inline=True)
         embed.add_field(name="📅 التاريخ", value=f"<t:{int(ctx.message.created_at.timestamp())}:D>", inline=True)
         embed.set_footer(text=f"{ctx.guild.name} • Axion Store Invoice", icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
-        await ctx.send(embed=embed)
+        await target_channel.send(embed=embed)
+
+    if target_channel.id != ctx.channel.id:
+        await ctx.send(f"✅ **تم إرسال الفاتورة إلى {target_channel.mention}**", delete_after=5)
 
 
 # ---------- 📊 فحص الدعوات (+invites) ----------
@@ -621,6 +630,71 @@ async def set_support_category(ctx: commands.Context, category_id: int):
     config["support_category_id"] = category.id
     save_config(config)
     await ctx.reply(f"✅ **تم اعتماد الكاتيجوري `{category.name}` لتذاكر الدعم الفني.**", mention_author=False)
+
+
+# ---------- 🧾 +iop : تعيين روم إرسال الفواتير ----------
+@bot.command(name="iop")
+async def set_invoice_channel(ctx: commands.Context, channel_id: int):
+    channel = ctx.guild.get_channel(channel_id)
+    if channel is None or not isinstance(channel, discord.TextChannel):
+        await ctx.reply("❌ **لم يتم العثور على القناة المحددة.**", mention_author=False)
+        return
+
+    config["invoice_channel_id"] = channel.id
+    save_config(config)
+    await ctx.reply(f"✅ **تم اعتماد {channel.mention} كقناة رسمية لإرسال الفواتير.**\nأي فاتورة تُصنع عبر `+invoice` ستُرسل تلقائياً لهذه القناة.", mention_author=False)
+
+
+# =========================================================
+# ================= ⚡ الإعداد السريع (+sal) ================
+# =========================================================
+
+@bot.command(name="sal")
+async def sal_command(ctx: commands.Context):
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+
+    results = []
+
+    buy_cat = ctx.guild.get_channel(1531084521985015868)
+    if buy_cat and isinstance(buy_cat, discord.CategoryChannel):
+        config["buy_category_id"] = buy_cat.id
+        results.append(f"✅ **كاتيجوري الشراء →** `{buy_cat.name}`")
+    else:
+        results.append("❌ **لم يتم العثور على كاتيجوري الشراء (تأكد من الآيدي).**")
+
+    support_cat = ctx.guild.get_channel(1531084999770509463)
+    if support_cat and isinstance(support_cat, discord.CategoryChannel):
+        config["support_category_id"] = support_cat.id
+        results.append(f"✅ **كاتيجوري الدعم الفني →** `{support_cat.name}`")
+    else:
+        results.append("❌ **لم يتم العثور على كاتيجوري الدعم الفني (تأكد من الآيدي).**")
+
+    welcome_ch = ctx.guild.get_channel(1524371159020343318)
+    if welcome_ch:
+        config["welcome_channel_id"] = welcome_ch.id
+        results.append(f"✅ **قناة الترحيب →** {welcome_ch.mention}")
+    else:
+        results.append("❌ **لم يتم العثور على قناة الترحيب (تأكد من الآيدي).**")
+
+    reviews_ch = ctx.guild.get_channel(1525251733046038528)
+    if reviews_ch:
+        config["reviews_channel_id"] = reviews_ch.id
+        results.append(f"✅ **قناة التقييمات →** {reviews_ch.mention}")
+    else:
+        results.append("❌ **لم يتم العثور على قناة التقييمات (تأكد من الآيدي).**")
+
+    save_config(config)
+
+    embed = discord.Embed(
+        title="⚡ تم تنفيذ الإعداد السريع",
+        description="\n".join(results),
+        color=EMBED_COLOR
+    )
+    embed.set_footer(text=f"{ctx.guild.name} • Quick Setup")
+    await ctx.send(embed=embed)
 
 
 @tasks.loop(hours=1)
