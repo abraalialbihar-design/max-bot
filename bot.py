@@ -65,10 +65,7 @@ def load_config():
         "tax_channel_id": None,
         "buy_category_id": None,
         "support_category_id": None,
-        "invoice_channel_id": None,
-        "payment_methods": DEFAULT_PAYMENT_METHODS,
-        "invoice_counter": 1,
-        "invoices": {}
+        "payment_methods": DEFAULT_PAYMENT_METHODS
     }
 
 
@@ -81,12 +78,6 @@ config = load_config()
 _config_dirty = False
 if "payment_methods" not in config:
     config["payment_methods"] = DEFAULT_PAYMENT_METHODS
-    _config_dirty = True
-if "invoice_counter" not in config:
-    config["invoice_counter"] = 1
-    _config_dirty = True
-if "invoices" not in config:
-    config["invoices"] = {}
     _config_dirty = True
 if _config_dirty:
     save_config(config)
@@ -238,80 +229,6 @@ class TicketSetupView(discord.ui.View):
 
 
 # =========================================================
-# ================ 🧾 نظام الفواتير (رقم تسلسلي) ============
-# =========================================================
-
-def build_invoice_embed(inv_id: int, record: dict, guild: discord.Guild) -> discord.Embed:
-    status = "✅ تم تأكيد الاستلام" if record.get("confirmed") else "⏳ بانتظار تأكيد الاستلام من العميل"
-    embed = discord.Embed(
-        title=f"🧾 فاتورة شراء إلكترونية #{inv_id}",
-        color=discord.Color.gold()
-    )
-    embed.add_field(name="👤 العميل", value=f"<@{record['buyer_id']}>", inline=True)
-    embed.add_field(name="👑 البائع / الموظف", value=f"<@{record['seller_id']}>", inline=True)
-    embed.add_field(name="🛍️ المنتج / الخدمة", value=f"`{record['product']}`", inline=False)
-    embed.add_field(name="💰 المبلغ المدفوع", value=f"`{record['amount']}`", inline=True)
-    embed.add_field(name="📅 التاريخ", value=f"`{record['date']}`", inline=True)
-    embed.add_field(name="📦 حالة الاستلام", value=status, inline=False)
-    embed.set_footer(text=f"{guild.name} • Axion Store Invoice", icon_url=guild.icon.url if guild.icon else None)
-    return embed
-
-
-class InvoiceView(discord.ui.View):
-    """زر تأكيد الاستلام أسفل الفاتورة - يضغطه العميل فقط."""
-    def __init__(self, inv_id: int):
-        super().__init__(timeout=None)
-        self.inv_id = inv_id
-
-        record = config.get("invoices", {}).get(str(inv_id), {})
-        already_confirmed = record.get("confirmed", False)
-
-        button = discord.ui.Button(
-            label="تم تأكيد الاستلام ✅" if already_confirmed else "تأكيد الاستلام",
-            emoji=None if already_confirmed else "📦",
-            style=discord.ButtonStyle.success,
-            custom_id=f"invoice_confirm:{inv_id}",
-            disabled=already_confirmed
-        )
-        button.callback = self.confirm_callback
-        self.add_item(button)
-
-    async def confirm_callback(self, interaction: discord.Interaction):
-        record = config.get("invoices", {}).get(str(self.inv_id))
-        if record is None:
-            await interaction.response.send_message("❌ **لم يتم العثور على بيانات هذه الفاتورة.**", ephemeral=True)
-            return
-
-        if interaction.user.id != record.get("buyer_id"):
-            await interaction.response.send_message("❌ **هذا الزر مخصص للعميل صاحب الفاتورة فقط.**", ephemeral=True)
-            return
-
-        if record.get("confirmed"):
-            await interaction.response.send_message("✅ **تم تأكيد الاستلام مسبقاً لهذه الفاتورة.**", ephemeral=True)
-            return
-
-        record["confirmed"] = True
-        save_config(config)
-
-        for item in self.children:
-            if isinstance(item, discord.ui.Button):
-                item.disabled = True
-                item.label = "تم تأكيد الاستلام ✅"
-                item.emoji = None
-
-        updated_embed = build_invoice_embed(self.inv_id, record, interaction.guild)
-
-        try:
-            await interaction.response.edit_message(embed=updated_embed, view=self)
-        except Exception:
-            pass
-
-        await interaction.followup.send(
-            f"✅ **تم تأكيد استلام الفاتورة `#{self.inv_id}` بواسطة {interaction.user.mention}**"
-        )
-
-
-# =========================================================
 # ===================== البوت الرئيسي =====================
 # =========================================================
 
@@ -327,14 +244,6 @@ class CustomBot(commands.Bot):
     async def setup_hook(self):
         self.add_view(TicketSetupView())
         self.add_view(TicketControlView())
-
-        # إعادة تفعيل أزرار "تأكيد الاستلام" للفواتير غير المؤكدة بعد إعادة التشغيل
-        for inv_id_str, record in config.get("invoices", {}).items():
-            if not record.get("confirmed"):
-                try:
-                    self.add_view(InvoiceView(int(inv_id_str)))
-                except Exception:
-                    pass
 
 bot = CustomBot()
 
@@ -585,60 +494,6 @@ async def removeto_command(ctx: commands.Context, member: discord.Member):
     await ctx.send(embed=embed)
 
 
-# ---------- 🧾 مولد الفواتير (+invoice) ----------
-@bot.command(name="invoice")
-async def create_invoice(ctx: commands.Context, buyer: discord.Member, amount: str = "غير محدد", *, product: str = "منتج"):
-    try: await ctx.message.delete()
-    except Exception: pass
-
-    # رقم فاتورة تسلسلي دائم بدل الرقم العشوائي - لا يتكرر أبداً ويسهل تتبعه
-    inv_id = config.get("invoice_counter", 1)
-    config["invoice_counter"] = inv_id + 1
-
-    date_str = f"{ctx.message.created_at:%Y-%m-%d}"
-    record = {
-        "buyer_id": buyer.id,
-        "seller_id": ctx.author.id,
-        "product": product,
-        "amount": amount,
-        "date": date_str,
-        "confirmed": False
-    }
-    config.setdefault("invoices", {})[str(inv_id)] = record
-    save_config(config)
-
-    embed = build_invoice_embed(inv_id, record, ctx.guild)
-    view = InvoiceView(inv_id)
-    bot.add_view(view)
-
-    # الرسالة الأساسية (مع زر تأكيد الاستلام) تُرسل في نفس قناة الأمر
-    await ctx.channel.send(content=f"{buyer.mention}", embed=embed, view=view)
-
-    # نسخة أرشيفية بدون زر تفاعلي تُرسل لقناة الفواتير المحددة (+iop / +sal) إن كانت مختلفة
-    invoice_channel_id = config.get("invoice_channel_id")
-    invoice_channel = ctx.guild.get_channel(invoice_channel_id) if invoice_channel_id else None
-    if invoice_channel and invoice_channel.id != ctx.channel.id:
-        try:
-            await invoice_channel.send(embed=embed)
-        except Exception as e:
-            print(f"خطأ أثناء إرسال نسخة الفاتورة لقناة الفواتير: {e}")
-
-
-# ---------- 🔍 عرض فاتورة سابقة برقمها (+chf) ----------
-@bot.command(name="chf")
-async def check_invoice(ctx: commands.Context, inv_id: int):
-    try: await ctx.message.delete()
-    except Exception: pass
-
-    record = config.get("invoices", {}).get(str(inv_id))
-    if record is None:
-        await ctx.send(f"❌ **لم يتم العثور على فاتورة برقم `#{inv_id}`.**", delete_after=6)
-        return
-
-    embed = build_invoice_embed(inv_id, record, ctx.guild)
-    await ctx.send(embed=embed)
-
-
 # ---------- 📊 فحص الدعوات (+invites) ----------
 @bot.command(name="invites")
 async def check_invites(ctx: commands.Context, member: discord.Member = None):
@@ -711,19 +566,6 @@ async def set_support_category(ctx: commands.Context, category_id: int):
     await ctx.reply(f"✅ **تم اعتماد الكاتيجوري `{category.name}` لتذاكر الدعم الفني.**", mention_author=False)
 
 
-# ---------- 🧾 +iop : تعيين روم إرسال الفواتير ----------
-@bot.command(name="iop")
-async def set_invoice_channel(ctx: commands.Context, channel_id: int):
-    channel = ctx.guild.get_channel(channel_id)
-    if channel is None or not isinstance(channel, discord.TextChannel):
-        await ctx.reply("❌ **لم يتم العثور على القناة المحددة.**", mention_author=False)
-        return
-
-    config["invoice_channel_id"] = channel.id
-    save_config(config)
-    await ctx.reply(f"✅ **تم اعتماد {channel.mention} كقناة رسمية لإرسال الفواتير.**", mention_author=False)
-
-
 # =========================================================
 # ================= ⚡ الإعداد السريع (+sal) ================
 # =========================================================
@@ -764,13 +606,6 @@ async def sal_command(ctx: commands.Context):
         results.append(f"✅ **قناة التقييمات →** {reviews_ch.mention}")
     else:
         results.append("❌ **لم يتم العثور على قناة التقييمات (تأكد من الآيدي).**")
-
-    invoice_ch = ctx.guild.get_channel(1531452513088176199)
-    if invoice_ch:
-        config["invoice_channel_id"] = invoice_ch.id
-        results.append(f"✅ **قناة الفواتير →** {invoice_ch.mention}")
-    else:
-        results.append("❌ **لم يتم العثور على قناة الفواتير (تأكد من الآيدي).**")
 
     save_config(config)
 
@@ -971,11 +806,8 @@ async def help_command(ctx: commands.Context):
             "`+removeto <@عضو>` • إزالة عضو من التذكرة الحالية\n"
             "`+timer <ساعات>` • بدء مؤقت تسليم الطلب\n"
             "`+terms` • عرض قوانين المتجر\n"
-            "`+invoice <@العميل> <المبلغ> <المنتج>` • إنشاء فاتورة برقم تسلسلي\n"
-            "`+chf <رقم الفاتورة>` • عرض فاتورة سابقة برقمها\n"
             "`+bnm <ID>` • تعيين كاتيجوري تذاكر الشراء\n"
             "`+dfg <ID>` • تعيين كاتيجوري تذاكر الدعم الفني\n"
-            "`+iop <ID>` • تعيين قناة أرشيف الفواتير\n"
             "`+setpay` • إعداد وتحديث طرق الدفع\n"
             "`+pay` • عرض طرق الدفع الحالية\n"
             "`+tax` • تعيين روم حساب الضريبة\n"
