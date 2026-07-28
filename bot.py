@@ -1,5 +1,6 @@
 import os
 import re
+import io
 import json
 import math
 import random
@@ -49,7 +50,6 @@ AXION_TERMS = (
 
 processing_messages = set()
 invites_cache = {}
-processed_receipts = set()   # ملاحظة: هذا الكاش في الذاكرة فقط ويُصفّر عند إعادة تشغيل البوت
 
 
 def load_config():
@@ -130,8 +130,6 @@ class TicketControlView(discord.ui.View):
 
     @discord.ui.button(label="إغلاق وحذف التذكرة", emoji="🔒", style=discord.ButtonStyle.danger, custom_id="close_ticket_btn")
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # ملاحظة: فقط الأشخاص القادرين أصلاً على رؤية القناة (صاحب التذكرة + الإدارة + رتب الدعم/الشراء)
-        # يمكنهم رؤية هذا الزر، لذا لا حاجة لفحص صلاحيات إضافي هنا.
         await interaction.response.send_message("🔒 **تم إغلاق التذكرة. سيتم حذف القناة تلقائياً خلال 5 ثوانٍ...**")
 
         for target, overwrite in interaction.channel.overwrites.items():
@@ -327,7 +325,7 @@ async def on_member_join(member: discord.Member):
     await channel.send(content=f"🎉 {member.mention}", embed=embed)
 
 
-# ---------- الرد التلقائي + فحص الإيصالات المكررة + حساب الضريبة ----------
+# ---------- الرد التلقائي + حساب الضريبة ----------
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot or message.guild is None:
@@ -338,23 +336,6 @@ async def on_message(message: discord.Message):
     processing_messages.add(message.id)
 
     try:
-        # فحص الإيصالات المكررة (Anti-Duplicate Receipts)
-        if message.attachments:
-            for attachment in message.attachments:
-                if attachment.content_type and attachment.content_type.startswith("image/"):
-                    img_bytes = await attachment.read()
-                    img_hash = hashlib.md5(img_bytes).hexdigest()
-
-                    if img_hash in processed_receipts:
-                        await message.delete()
-                        await message.channel.send(
-                            f"⚠️ {message.author.mention} **تحذير:** تم اكتشاف صورة إيصال مكررة تم استخدامها من قبل! تم حذف الرسالة.",
-                            delete_after=10
-                        )
-                        return
-                    else:
-                        processed_receipts.add(img_hash)
-
         if message.content.strip() == "شعار":
             await message.reply("𝐌𝐗 |", mention_author=False)
 
@@ -792,6 +773,7 @@ async def help_command(ctx: commands.Context):
             "`+font <النص>` • زخرفة النصوص بشكل احترافي\n"
             "`+say <الرسالة>` • إرسال نص باسم البوت\n"
             "`+say-embed <الرسالة>` • إرسال إيمبد منسق\n"
+            "`+say-photo <الرسالة>` • إرسال صورة مرفقة مع نص باسم البوت\n"
             "`+invites [@عضو]` • عرض عدد دعوات عضو"
         ),
         inline=False
@@ -1131,6 +1113,32 @@ async def say_embed(ctx: commands.Context, *, message: str):
 
     embed = discord.Embed(description=message, color=EMBED_COLOR)
     await ctx.send(embed=embed)
+
+
+# ---------- +say-photo ----------
+@bot.command(name="say-photo")
+async def say_photo(ctx: commands.Context, *, message: str = None):
+    if not ctx.message.attachments:
+        await ctx.reply("⚠️ **يجب إرفاق صورة مع الأمر.**", mention_author=False, delete_after=6)
+        return
+
+    attachment = ctx.message.attachments[0]
+    if not (attachment.content_type and attachment.content_type.startswith("image/")):
+        await ctx.reply("⚠️ **الملف المرفق يجب أن يكون صورة.**", mention_author=False, delete_after=6)
+        return
+
+    img_bytes = await attachment.read()
+    file = discord.File(io.BytesIO(img_bytes), filename=attachment.filename)
+
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+
+    if message:
+        await ctx.send(content=message, file=file)
+    else:
+        await ctx.send(file=file)
 
 
 # =========================================================
