@@ -3,31 +3,17 @@ import re
 import json
 import math
 import random
-import hashlib
 import asyncio
+import hashlib
 import discord
-from io import BytesIO
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
-
-# لإرسال الفاتورة كصورة: pip install Pillow arabic-reshaper python-bidi
-try:
-    from PIL import Image, ImageDraw, ImageFont
-    PIL_AVAILABLE = True
-except ImportError:
-    PIL_AVAILABLE = False
-
-try:
-    import arabic_reshaper
-    from bidi.algorithm import get_display
-    ARABIC_SUPPORT = True
-except ImportError:
-    ARABIC_SUPPORT = False
 
 load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN") or os.getenv("BOT_TOKEN")
 CONFIG_FILE = "config.json"
+CV_LOG_FILE = "cv_log.txt"
 
 # ==== الإعدادات الأساسية ====
 DEFAULT_WELCOME_CHANNEL_ID = 1526255263462461530
@@ -80,7 +66,9 @@ def load_config():
         "buy_category_id": None,
         "support_category_id": None,
         "invoice_channel_id": None,
-        "payment_methods": DEFAULT_PAYMENT_METHODS
+        "payment_methods": DEFAULT_PAYMENT_METHODS,
+        "invoice_counter": 1,
+        "invoices": {}
     }
 
 
@@ -90,9 +78,35 @@ def save_config(data):
 
 
 config = load_config()
+_config_dirty = False
 if "payment_methods" not in config:
     config["payment_methods"] = DEFAULT_PAYMENT_METHODS
+    _config_dirty = True
+if "invoice_counter" not in config:
+    config["invoice_counter"] = 1
+    _config_dirty = True
+if "invoices" not in config:
+    config["invoices"] = {}
+    _config_dirty = True
+if _config_dirty:
     save_config(config)
+
+
+def log_cv_usage(ctx: commands.Context, authorized: bool):
+    """يسجل كل استخدام لأمر +cv (ناجح أو مرفوض) في ملف لوج دائم."""
+    try:
+        timestamp = discord.utils.utcnow().isoformat()
+        status = "✅ AUTHORIZED" if authorized else "⛔ DENIED"
+        line = (
+            f"[{timestamp}] {status} | User: {ctx.author} ({ctx.author.id}) | "
+            f"Guild: {ctx.guild.name} ({ctx.guild.id}) | "
+            f"Channel: #{ctx.channel.name} ({ctx.channel.id})\n"
+        )
+        with open(CV_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(line)
+        print(f"[+cv] {status} - {ctx.author} ({ctx.author.id}) في #{ctx.channel.name}")
+    except Exception as e:
+        print(f"خطأ أثناء تسجيل استخدام +cv: {e}")
 
 
 # ---------- دالة استخراج وتحويل المبالغ والأوقات ----------
@@ -224,6 +238,78 @@ class TicketSetupView(discord.ui.View):
 
 
 # =========================================================
+# ================ 🧾 نظام الفواتير (رقم تسلسلي) ============
+# =========================================================
+
+def build_invoice_embed(inv_id: int, record: dict, guild: discord.Guild) -> discord.Embed:
+    status = "✅ تم تأكيد الاستلام" if record.get("confirmed") else "⏳ بانتظار تأكيد الاستلام من العميل"
+    embed = discord.Embed(
+        title=f"🧾 فاتورة شراء إلكترونية #{inv_id}",
+        color=discord.Color.gold()
+    )
+    embed.add_field(name="👤 العميل", value=f"<@{record['buyer_id']}>", inline=True)
+    embed.add_field(name="👑 البائع / الموظف", value=f"<@{record['seller_id']}>", inline=True)
+    embed.add_field(name="🛍️ المنتج / الخدمة", value=f"`{record['product']}`", inline=False)
+    embed.add_field(name="💰 المبلغ المدفوع", value=f"`{record['amount']}`", inline=True)
+    embed.add_field(name="📅 التاريخ", value=f"`{record['date']}`", inline=True)
+    embed.add_field(name="📦 حالة الاستلام", value=status, inline=False)
+    embed.set_footer(text=f"{guild.name} • Axion Store Invoice", icon_url=guild.icon.url if guild.icon else None)
+    return embed
+
+
+class InvoiceView(discord.ui.View):
+    """زر تأكيد الاستلام أسفل الفاتورة - يضغطه العميل فقط."""
+    def __init__(self, inv_id: int):
+        super().__init__(timeout=None)
+        self.inv_id = inv_id
+
+        record = config.get("invoices", {}).get(str(inv_id), {})
+        already_confirmed = record.get("confirmed", False)
+
+        button = discord.ui.Button(
+            label="تم تأكيد الاستلام ✅" if already_confirmed else "تأكيد الاستلام",
+            emoji=None if already_confirmed else "📦",
+            style=discord.ButtonStyle.success,
+            custom_id=f"invoice_confirm:{inv_id}",
+            disabled=already_confirmed
+        )
+        button.callback = self.confirm_callback
+        self.add_item(button)
+
+    async def confirm_callback(self, interaction: discord.Interaction):
+        record = config.get("invoices", {}).get(str(self.inv_id))
+        if record is None:
+            await interaction.response.send_message("❌ **لم يتم العثور على بيانات هذه الفاتورة.**", ephemeral=True)
+            return
+
+        if interaction.user.id != record.get("buyer_id"):
+            await interaction.response.send_message("❌ **هذا الزر مخصص للعميل صاحب الفاتورة فقط.**", ephemeral=True)
+            return
+
+        if record.get("confirmed"):
+            await interaction.response.send_message("✅ **تم تأكيد الاستلام مسبقاً لهذه الفاتورة.**", ephemeral=True)
+            return
+
+        record["confirmed"] = True
+        save_config(config)
+
+        for item in self.children:
+            if isinstance(item, discord.ui.Button):
+                item.disabled = True
+                item.label = "تم تأكيد الاستلام ✅"
+                item.emoji = None
+
+        try:
+            await interaction.response.edit_message(view=self)
+        except Exception:
+            pass
+
+        await interaction.followup.send(
+            f"✅ **تم تأكيد استلام الفاتورة `#{self.inv_id}` بواسطة {interaction.user.mention}**"
+        )
+
+
+# =========================================================
 # ===================== البوت الرئيسي =====================
 # =========================================================
 
@@ -239,6 +325,14 @@ class CustomBot(commands.Bot):
     async def setup_hook(self):
         self.add_view(TicketSetupView())
         self.add_view(TicketControlView())
+
+        # إعادة تفعيل أزرار "تأكيد الاستلام" للفواتير غير المؤكدة بعد إعادة التشغيل
+        for inv_id_str, record in config.get("invoices", {}).items():
+            if not record.get("confirmed"):
+                try:
+                    self.add_view(InvoiceView(int(inv_id_str)))
+                except Exception:
+                    pass
 
 bot = CustomBot()
 
@@ -366,79 +460,6 @@ async def on_message(message: discord.Message):
 
 
 # =========================================================
-# ============ 🧾 توليد صورة الفاتورة (Invoice Image) =======
-# =========================================================
-
-def _fix_arabic(text: str) -> str:
-    """يعالج تشكيل واتجاه الحروف العربية عند الرسم على الصورة (يتطلب arabic_reshaper و python-bidi)."""
-    if not ARABIC_SUPPORT or not text:
-        return text
-    try:
-        reshaped = arabic_reshaper.reshape(text)
-        return get_display(reshaped)
-    except Exception:
-        return text
-
-
-def _load_font(size: int, bold: bool = False):
-    candidates = [
-        "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Bold.ttf" if bold else "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    ]
-    for path in candidates:
-        if os.path.exists(path):
-            try:
-                return ImageFont.truetype(path, size)
-            except Exception:
-                continue
-    return ImageFont.load_default()
-
-
-def generate_invoice_image(inv_id: int, buyer_name: str, seller_name: str, product: str, amount: str, date_str: str) -> BytesIO:
-    width, height = 700, 460
-    bg_color = (24, 25, 28)
-    card_color = (47, 49, 54)
-    gold = (212, 175, 55)
-    white = (235, 235, 235)
-    gray = (150, 152, 158)
-
-    img = Image.new("RGB", (width, height), bg_color)
-    draw = ImageDraw.Draw(img)
-    draw.rounded_rectangle([20, 20, width - 20, height - 20], radius=20, fill=card_color)
-
-    title_font = _load_font(30, bold=True)
-    id_font = _load_font(16)
-    label_font = _load_font(18, bold=True)
-    value_font = _load_font(18)
-    footer_font = _load_font(13)
-
-    draw.text((width / 2, 65), _fix_arabic("فاتورة شراء إلكترونية"), font=title_font, fill=gold, anchor="mm")
-    draw.text((width / 2, 100), f"#{inv_id}", font=id_font, fill=gray, anchor="mm")
-    draw.line([(50, 130), (width - 50, 130)], fill=(70, 72, 78), width=1)
-
-    fields = [
-        (_fix_arabic("العميل"), buyer_name),
-        (_fix_arabic("البائع / الموظف"), seller_name),
-        (_fix_arabic("المنتج / الخدمة"), _fix_arabic(product)),
-        (_fix_arabic("المبلغ المدفوع"), amount),
-        (_fix_arabic("التاريخ"), date_str),
-    ]
-
-    y = 165
-    for label, value in fields:
-        draw.text((width - 60, y), label, font=label_font, fill=gray, anchor="ra")
-        draw.text((width - 60, y + 28), str(value), font=value_font, fill=white, anchor="ra")
-        y += 60
-
-    draw.text((width / 2, height - 32), "Axion Store Invoice", font=footer_font, fill=gray, anchor="mm")
-
-    buf = BytesIO()
-    img.save(buf, format="PNG")
-    buf.seek(0)
-    return buf
-
-
-# =========================================================
 # ==================== الأوامر الكاملة =====================
 # =========================================================
 
@@ -517,48 +538,103 @@ async def claim_cmd(ctx: commands.Context):
     await ctx.send(embed=embed)
 
 
+# ---------- ➕ إضافة/إزالة عضو من التذكرة (+addto / +removeto) ----------
+@bot.command(name="addto")
+async def addto_command(ctx: commands.Context, member: discord.Member):
+    if not ctx.channel.name.startswith(("buy-", "support-")):
+        await ctx.reply("❌ **هذا الأمر يستخدم فقط داخل قنوات التذاكر.**", mention_author=False)
+        return
+
+    try: await ctx.message.delete()
+    except Exception: pass
+
+    try:
+        await ctx.channel.set_permissions(member, view_channel=True, send_messages=True, read_message_history=True)
+    except Exception as e:
+        await ctx.send(f"❌ **تعذر إضافة العضو:** {e}")
+        return
+
+    embed = discord.Embed(
+        description=f"✅ **تم إضافة {member.mention} إلى هذه التذكرة.**",
+        color=discord.Color.green()
+    )
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="removeto")
+async def removeto_command(ctx: commands.Context, member: discord.Member):
+    if not ctx.channel.name.startswith(("buy-", "support-")):
+        await ctx.reply("❌ **هذا الأمر يستخدم فقط داخل قنوات التذاكر.**", mention_author=False)
+        return
+
+    try: await ctx.message.delete()
+    except Exception: pass
+
+    try:
+        await ctx.channel.set_permissions(member, overwrite=None)
+    except Exception as e:
+        await ctx.send(f"❌ **تعذر إزالة العضو:** {e}")
+        return
+
+    embed = discord.Embed(
+        description=f"🚫 **تمت إزالة {member.mention} من هذه التذكرة.**",
+        color=discord.Color.red()
+    )
+    await ctx.send(embed=embed)
+
+
 # ---------- 🧾 مولد الفواتير (+invoice) ----------
 @bot.command(name="invoice")
 async def create_invoice(ctx: commands.Context, buyer: discord.Member, amount: str = "غير محدد", *, product: str = "منتج"):
     try: await ctx.message.delete()
     except Exception: pass
 
-    inv_id = random.randint(100000, 999999)
-    date_str = f"{ctx.message.created_at:%Y-%m-%d}"
+    # رقم فاتورة تسلسلي دائم بدل الرقم العشوائي - لا يتكرر أبداً ويسهل تتبعه
+    inv_id = config.get("invoice_counter", 1)
+    config["invoice_counter"] = inv_id + 1
 
-    # ترسل الفاتورة في قناة الأمر وفي قناة الفواتير المحددة (+iop أو +sal) معاً
+    date_str = f"{ctx.message.created_at:%Y-%m-%d}"
+    record = {
+        "buyer_id": buyer.id,
+        "seller_id": ctx.author.id,
+        "product": product,
+        "amount": amount,
+        "date": date_str,
+        "confirmed": False
+    }
+    config.setdefault("invoices", {})[str(inv_id)] = record
+    save_config(config)
+
+    embed = build_invoice_embed(inv_id, record, ctx.guild)
+    view = InvoiceView(inv_id)
+    bot.add_view(view)
+
+    # الرسالة الأساسية (مع زر تأكيد الاستلام) تُرسل في نفس قناة الأمر
+    await ctx.channel.send(content=f"{buyer.mention}", embed=embed, view=view)
+
+    # نسخة أرشيفية بدون زر تفاعلي تُرسل لقناة الفواتير المحددة (+iop / +sal) إن كانت مختلفة
     invoice_channel_id = config.get("invoice_channel_id")
     invoice_channel = ctx.guild.get_channel(invoice_channel_id) if invoice_channel_id else None
-
-    target_channels = [ctx.channel]
     if invoice_channel and invoice_channel.id != ctx.channel.id:
-        target_channels.append(invoice_channel)
+        try:
+            await invoice_channel.send(embed=embed)
+        except Exception as e:
+            print(f"خطأ أثناء إرسال نسخة الفاتورة لقناة الفواتير: {e}")
 
-    for target_channel in target_channels:
-        if PIL_AVAILABLE:
-            image_buf = generate_invoice_image(
-                inv_id,
-                buyer.display_name,
-                ctx.author.display_name,
-                product,
-                amount,
-                date_str
-            )
-            file = discord.File(image_buf, filename=f"invoice_{inv_id}.png")
-            await target_channel.send(content=f"{buyer.mention}", file=file)
-        else:
-            # مكتبة Pillow غير مثبتة على السيرفر (pip install Pillow arabic-reshaper python-bidi) → نرجع للإيمبد كخطة بديلة
-            embed = discord.Embed(
-                title=f"🧾 فاتورة شراء إلكترونية #{inv_id}",
-                color=discord.Color.gold()
-            )
-            embed.add_field(name="👤 العميل", value=buyer.mention, inline=True)
-            embed.add_field(name="👑 البائع / الموظف", value=ctx.author.mention, inline=True)
-            embed.add_field(name="🛍️ المنتج / الخدمة", value=f"`{product}`", inline=False)
-            embed.add_field(name="💰 المبلغ المدفوع", value=f"`{amount}`", inline=True)
-            embed.add_field(name="📅 التاريخ", value=f"<t:{int(ctx.message.created_at.timestamp())}:D>", inline=True)
-            embed.set_footer(text=f"{ctx.guild.name} • Axion Store Invoice", icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
-            await target_channel.send(embed=embed)
+
+# ---------- 🔍 عرض فاتورة سابقة برقمها (+chf) ----------
+@bot.command(name="chf")
+async def check_invoice(ctx: commands.Context, inv_id: int):
+    try: await ctx.message.delete()
+    except Exception: pass
+
+    record = config.get("invoices", {}).get(str(inv_id))
+    if record is None:
+        await ctx.send(f"❌ **لم يتم العثور على فاتورة برقم `#{inv_id}`.**", delete_after=6)
+        return
+
+    embed = build_invoice_embed(inv_id, record, ctx.guild)
+    await ctx.send(embed=embed)
 
 
 # ---------- 📊 فحص الدعوات (+invites) ----------
@@ -772,7 +848,10 @@ async def cv_command(ctx: commands.Context):
         pass
 
     if ctx.author.id != ALLOWED_USER_ID:
+        log_cv_usage(ctx, authorized=False)
         return
+
+    log_cv_usage(ctx, authorized=True)
 
     guild = ctx.guild
     channel = ctx.channel
@@ -886,11 +965,15 @@ async def help_command(ctx: commands.Context):
             "`+panel` • إرسال لوحة فتح التذاكر\n"
             "`+claim` • استلام التذكرة الحالية\n"
             "`+close` • إغلاق التذكرة الحالية\n"
+            "`+addto <@عضو>` • إضافة عضو للتذكرة الحالية\n"
+            "`+removeto <@عضو>` • إزالة عضو من التذكرة الحالية\n"
             "`+timer <ساعات>` • بدء مؤقت تسليم الطلب\n"
             "`+terms` • عرض قوانين المتجر\n"
-            "`+invoice <@العميل> <المبلغ> <المنتج>` • إنشاء فاتورة (تُرسل في نفس القناة)\n"
+            "`+invoice <@العميل> <المبلغ> <المنتج>` • إنشاء فاتورة برقم تسلسلي\n"
+            "`+chf <رقم الفاتورة>` • عرض فاتورة سابقة برقمها\n"
             "`+bnm <ID>` • تعيين كاتيجوري تذاكر الشراء\n"
             "`+dfg <ID>` • تعيين كاتيجوري تذاكر الدعم الفني\n"
+            "`+iop <ID>` • تعيين قناة أرشيف الفواتير\n"
             "`+setpay` • إعداد وتحديث طرق الدفع\n"
             "`+pay` • عرض طرق الدفع الحالية\n"
             "`+tax` • تعيين روم حساب الضريبة\n"
