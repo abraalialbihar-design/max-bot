@@ -53,8 +53,6 @@ AXION_TERMS = (
 
 processing_messages = set()
 invites_cache = {}
-pending_ticket_warnings = {}   # channel_id -> وقت إرسال تحذير +kl (UTC)
-CLOSE_WARNING_MINUTES = 45     # بين 30 و60 دقيقة
 
 
 def load_config():
@@ -547,46 +545,7 @@ async def close_ticket_cmd(ctx: commands.Context):
         pass
 
 
-# ---------- ⚠️ تحذير قبل الإغلاق التلقائي (+kl) ----------
-async def _auto_close_after_warning(channel: discord.TextChannel, warning_time):
-    await asyncio.sleep(CLOSE_WARNING_MINUTES * 60)
-
-    # لو صدر تحذير +kl جديد بعد هذا الطلب، هذا الطلب القديم يتجاهل
-    if pending_ticket_warnings.get(channel.id) != warning_time:
-        return
-
-    try:
-        history = [m async for m in channel.history(limit=1)]
-    except Exception:
-        history = []
-
-    # لو وصل رد جديد بعد وقت التحذير، يلغى الإغلاق التلقائي
-    if history and history[0].created_at > warning_time:
-        pending_ticket_warnings.pop(channel.id, None)
-        return
-
-    pending_ticket_warnings.pop(channel.id, None)
-
-    try:
-        await channel.send("🔒 **تم إغلاق التذكرة تلقائيًا لعدم الرد. سيتم حذف القناة خلال 5 ثوانٍ...**")
-    except Exception:
-        pass
-
-    for target, overwrite in channel.overwrites.items():
-        if isinstance(target, discord.Member) and not target.bot:
-            overwrite.send_messages = False
-            try:
-                await channel.set_permissions(target, overwrite=overwrite)
-            except Exception:
-                pass
-
-    await asyncio.sleep(5)
-    try:
-        await channel.delete()
-    except Exception:
-        pass
-
-
+# ---------- ⚠️ تحذير قبل الإغلاق (+kl) - رسالة فقط بدون أي إجراء تلقائي ----------
 @bot.command(name="kl")
 async def kl_warning(ctx: commands.Context):
     if not ctx.channel.name.startswith(("buy-", "support-")):
@@ -598,14 +557,9 @@ async def kl_warning(ctx: commands.Context):
     except Exception:
         pass
 
-    warning_time = discord.utils.utcnow()
-    pending_ticket_warnings[ctx.channel.id] = warning_time
-
     await ctx.send(
         "<a:OWNER:1530380061595795526>**في حالة لم يكن هناك رد لمده تتراوح ما بين 30 إلى 60 دقيقة ، سيتم اغلاق التذكره**"
     )
-
-    asyncio.create_task(_auto_close_after_warning(ctx.channel, warning_time))
 
 @bot.command(name="bnm")
 async def set_buy_category(ctx: commands.Context, category_id: int):
@@ -671,6 +625,13 @@ async def sal_command(ctx: commands.Context):
         results.append(f"✅ **قناة التقييمات →** {reviews_ch.mention}")
     else:
         results.append("❌ **لم يتم العثور على قناة التقييمات (تأكد من الآيدي).**")
+
+    tax_ch = ctx.guild.get_channel(1525241937400037567)
+    if tax_ch:
+        config["tax_channel_id"] = tax_ch.id
+        results.append(f"✅ **قناة حساب الضريبة →** {tax_ch.mention}")
+    else:
+        results.append("❌ **لم يتم العثور على قناة الضريبة (تأكد من الآيدي).**")
 
     save_config(config)
 
@@ -877,7 +838,7 @@ async def help_command(ctx: commands.Context):
             "`+dfg <ID>` • تعيين كاتيجوري تذاكر الدعم الفني\n"
             "`+setpay` • إعداد وتحديث طرق الدفع\n"
             "`+pay` • عرض طرق الدفع الحالية\n"
-            "`+tax` • تعيين روم حساب الضريبة\n"
+            "`+tax [ID]` • تعيين روم حساب الضريبة (الحالية أو بالآيدي)\n"
             "`+rate <@المشتري> <المنتج>` • طلب تقييم من المشتري\n"
             "`+rate-setup <ID>` • تعيين روم التقييمات\n"
             "`+setup-welcome <ID>` • تعيين روم الترحيب"
@@ -898,12 +859,17 @@ async def help_command(ctx: commands.Context):
     await ctx.reply(embed=embed, mention_author=False)
 
 
-# ---------- +tax ----------
+# ---------- +tax (tax id room) ----------
 @bot.command(name="tax", aliases=["tax-setup"])
-async def tax_setup(ctx: commands.Context):
-    config["tax_channel_id"] = ctx.channel.id
+async def tax_setup(ctx: commands.Context, room_id: int = None):
+    channel = ctx.guild.get_channel(room_id) if room_id else ctx.channel
+    if channel is None:
+        await ctx.reply("❌ **لم يتم العثور على القناة المحددة.**", mention_author=False)
+        return
+
+    config["tax_channel_id"] = channel.id
     save_config(config)
-    await ctx.reply(f"✅ **تم اعتماد قناة {ctx.channel.mention} لحساب الضريبة تلقائياً.**", mention_author=False)
+    await ctx.reply(f"✅ **تم اعتماد قناة {channel.mention} لحساب الضريبة تلقائياً.**", mention_author=False)
 
 
 # ---------- +ping ----------
