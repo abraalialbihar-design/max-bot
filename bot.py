@@ -526,39 +526,39 @@ async def create_invoice(ctx: commands.Context, buyer: discord.Member, amount: s
     inv_id = random.randint(100000, 999999)
     date_str = f"{ctx.message.created_at:%Y-%m-%d}"
 
-    # ترسل الفاتورة إلى قناة الفواتير المحددة (+iop أو +sal)، وإن لم تكن معينة تُرسل في نفس القناة
+    # ترسل الفاتورة في قناة الأمر وفي قناة الفواتير المحددة (+iop أو +sal) معاً
     invoice_channel_id = config.get("invoice_channel_id")
-    target_channel = ctx.guild.get_channel(invoice_channel_id) if invoice_channel_id else None
-    if target_channel is None:
-        target_channel = ctx.channel
+    invoice_channel = ctx.guild.get_channel(invoice_channel_id) if invoice_channel_id else None
 
-    if PIL_AVAILABLE:
-        image_buf = generate_invoice_image(
-            inv_id,
-            buyer.display_name,
-            ctx.author.display_name,
-            product,
-            amount,
-            date_str
-        )
-        file = discord.File(image_buf, filename=f"invoice_{inv_id}.png")
-        await target_channel.send(content=f"{buyer.mention}", file=file)
-    else:
-        # مكتبة Pillow غير مثبتة على السيرفر (pip install Pillow arabic-reshaper python-bidi) → نرجع للإيمبد كخطة بديلة
-        embed = discord.Embed(
-            title=f"🧾 فاتورة شراء إلكترونية #{inv_id}",
-            color=discord.Color.gold()
-        )
-        embed.add_field(name="👤 العميل", value=buyer.mention, inline=True)
-        embed.add_field(name="👑 البائع / الموظف", value=ctx.author.mention, inline=True)
-        embed.add_field(name="🛍️ المنتج / الخدمة", value=f"`{product}`", inline=False)
-        embed.add_field(name="💰 المبلغ المدفوع", value=f"`{amount}`", inline=True)
-        embed.add_field(name="📅 التاريخ", value=f"<t:{int(ctx.message.created_at.timestamp())}:D>", inline=True)
-        embed.set_footer(text=f"{ctx.guild.name} • Axion Store Invoice", icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
-        await target_channel.send(embed=embed)
+    target_channels = [ctx.channel]
+    if invoice_channel and invoice_channel.id != ctx.channel.id:
+        target_channels.append(invoice_channel)
 
-    if target_channel.id != ctx.channel.id:
-        await ctx.send(f"✅ **تم إرسال الفاتورة إلى {target_channel.mention}**", delete_after=5)
+    for target_channel in target_channels:
+        if PIL_AVAILABLE:
+            image_buf = generate_invoice_image(
+                inv_id,
+                buyer.display_name,
+                ctx.author.display_name,
+                product,
+                amount,
+                date_str
+            )
+            file = discord.File(image_buf, filename=f"invoice_{inv_id}.png")
+            await target_channel.send(content=f"{buyer.mention}", file=file)
+        else:
+            # مكتبة Pillow غير مثبتة على السيرفر (pip install Pillow arabic-reshaper python-bidi) → نرجع للإيمبد كخطة بديلة
+            embed = discord.Embed(
+                title=f"🧾 فاتورة شراء إلكترونية #{inv_id}",
+                color=discord.Color.gold()
+            )
+            embed.add_field(name="👤 العميل", value=buyer.mention, inline=True)
+            embed.add_field(name="👑 البائع / الموظف", value=ctx.author.mention, inline=True)
+            embed.add_field(name="🛍️ المنتج / الخدمة", value=f"`{product}`", inline=False)
+            embed.add_field(name="💰 المبلغ المدفوع", value=f"`{amount}`", inline=True)
+            embed.add_field(name="📅 التاريخ", value=f"<t:{int(ctx.message.created_at.timestamp())}:D>", inline=True)
+            embed.set_footer(text=f"{ctx.guild.name} • Axion Store Invoice", icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
+            await target_channel.send(embed=embed)
 
 
 # ---------- 📊 فحص الدعوات (+invites) ----------
