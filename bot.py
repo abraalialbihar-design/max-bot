@@ -28,6 +28,9 @@ SUPPORT_ROLE_ID = 1530413725578694746  # رتبة الدعم الفني
 # ==== آيدي الشخص المسموح له بـ +cv ====
 ALLOWED_USER_ID = 1426552057984454817
 
+# ==== آيدي الشخص اللي يستلم إشعار خاص عند فتح أي تذكرة ====
+TICKET_NOTIFY_USER_ID = 1426552057984454817
+
 STAR_EMOJI = "⭐"
 EMBED_COLOR = discord.Color.from_rgb(47, 49, 54)
 
@@ -216,6 +219,29 @@ class TicketSetupView(discord.ui.View):
 
         mention_content = f"{member.mention} <@&{role_id}>"
         await ticket_channel.send(content=mention_content, embed=embed, view=TicketControlView())
+
+        # ---- إشعار خاص لصاحب الآيدي المحدد عند فتح أي تذكرة ----
+        try:
+            notify_user = guild.get_member(TICKET_NOTIFY_USER_ID) or await guild.fetch_member(TICKET_NOTIFY_USER_ID)
+        except Exception:
+            notify_user = None
+
+        if notify_user:
+            notify_embed = discord.Embed(
+                title="🎫 تم فتح تذكرة جديدة",
+                description=(
+                    f"👤 **العضو:** {member.mention} (`{member.id}`)\n"
+                    f"📌 **النوع:** {title_msg}\n"
+                    f"💬 **القناة:** {ticket_channel.mention}\n"
+                    f"🏠 **السيرفر:** {guild.name}"
+                ),
+                color=EMBED_COLOR
+            )
+            notify_embed.timestamp = discord.utils.utcnow()
+            try:
+                await notify_user.send(embed=notify_embed)
+            except Exception:
+                pass
 
     @discord.ui.button(label="شراء منتج", emoji="🛒", style=discord.ButtonStyle.success, custom_id="persistent_buy_ticket")
     async def buy_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
