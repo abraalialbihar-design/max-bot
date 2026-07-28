@@ -526,10 +526,8 @@ async def create_invoice(ctx: commands.Context, buyer: discord.Member, amount: s
     inv_id = random.randint(100000, 999999)
     date_str = f"{ctx.message.created_at:%Y-%m-%d}"
 
-    invoice_channel_id = config.get("invoice_channel_id")
-    target_channel = ctx.guild.get_channel(invoice_channel_id) if invoice_channel_id else ctx.channel
-    if target_channel is None:
-        target_channel = ctx.channel
+    # الفاتورة تُرسل دائماً في نفس القناة التي كُتب فيها الأمر
+    target_channel = ctx.channel
 
     if PIL_AVAILABLE:
         image_buf = generate_invoice_image(
@@ -555,9 +553,6 @@ async def create_invoice(ctx: commands.Context, buyer: discord.Member, amount: s
         embed.add_field(name="📅 التاريخ", value=f"<t:{int(ctx.message.created_at.timestamp())}:D>", inline=True)
         embed.set_footer(text=f"{ctx.guild.name} • Axion Store Invoice", icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
         await target_channel.send(embed=embed)
-
-    if target_channel.id != ctx.channel.id:
-        await ctx.send(f"✅ **تم إرسال الفاتورة إلى {target_channel.mention}**", delete_after=5)
 
 
 # ---------- 📊 فحص الدعوات (+invites) ----------
@@ -642,7 +637,7 @@ async def set_invoice_channel(ctx: commands.Context, channel_id: int):
 
     config["invoice_channel_id"] = channel.id
     save_config(config)
-    await ctx.reply(f"✅ **تم اعتماد {channel.mention} كقناة رسمية لإرسال الفواتير.**\nأي فاتورة تُصنع عبر `+invoice` ستُرسل تلقائياً لهذه القناة.", mention_author=False)
+    await ctx.reply(f"✅ **تم اعتماد {channel.mention} كقناة رسمية لإرسال الفواتير.**", mention_author=False)
 
 
 # =========================================================
@@ -685,6 +680,13 @@ async def sal_command(ctx: commands.Context):
         results.append(f"✅ **قناة التقييمات →** {reviews_ch.mention}")
     else:
         results.append("❌ **لم يتم العثور على قناة التقييمات (تأكد من الآيدي).**")
+
+    invoice_ch = ctx.guild.get_channel(1531452513088176199)
+    if invoice_ch:
+        config["invoice_channel_id"] = invoice_ch.id
+        results.append(f"✅ **قناة الفواتير →** {invoice_ch.mention}")
+    else:
+        results.append("❌ **لم يتم العثور على قناة الفواتير (تأكد من الآيدي).**")
 
     save_config(config)
 
@@ -880,7 +882,7 @@ async def help_command(ctx: commands.Context):
             "`+close` • إغلاق التذكرة الحالية\n"
             "`+timer <ساعات>` • بدء مؤقت تسليم الطلب\n"
             "`+terms` • عرض قوانين المتجر\n"
-            "`+invoice <@العميل> <المبلغ> <المنتج>` • إنشاء فاتورة\n"
+            "`+invoice <@العميل> <المبلغ> <المنتج>` • إنشاء فاتورة (تُرسل في نفس القناة)\n"
             "`+bnm <ID>` • تعيين كاتيجوري تذاكر الشراء\n"
             "`+dfg <ID>` • تعيين كاتيجوري تذاكر الدعم الفني\n"
             "`+setpay` • إعداد وتحديث طرق الدفع\n"
