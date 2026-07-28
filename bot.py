@@ -53,6 +53,8 @@ AXION_TERMS = (
 
 processing_messages = set()
 invites_cache = {}
+pending_ticket_warnings = {}   # channel_id -> وقت إرسال تحذير +kl (UTC)
+CLOSE_WARNING_MINUTES = 45     # بين 30 و60 دقيقة
 
 
 def load_config():
@@ -545,9 +547,65 @@ async def close_ticket_cmd(ctx: commands.Context):
         pass
 
 
-# =========================================================
-# ================= ⚙️ إعدادات الكاتيجوري (+bnm / +dfg) =======
-# =========================================================
+# ---------- ⚠️ تحذير قبل الإغلاق التلقائي (+kl) ----------
+async def _auto_close_after_warning(channel: discord.TextChannel, warning_time):
+    await asyncio.sleep(CLOSE_WARNING_MINUTES * 60)
+
+    # لو صدر تحذير +kl جديد بعد هذا الطلب، هذا الطلب القديم يتجاهل
+    if pending_ticket_warnings.get(channel.id) != warning_time:
+        return
+
+    try:
+        history = [m async for m in channel.history(limit=1)]
+    except Exception:
+        history = []
+
+    # لو وصل رد جديد بعد وقت التحذير، يلغى الإغلاق التلقائي
+    if history and history[0].created_at > warning_time:
+        pending_ticket_warnings.pop(channel.id, None)
+        return
+
+    pending_ticket_warnings.pop(channel.id, None)
+
+    try:
+        await channel.send("🔒 **تم إغلاق التذكرة تلقائيًا لعدم الرد. سيتم حذف القناة خلال 5 ثوانٍ...**")
+    except Exception:
+        pass
+
+    for target, overwrite in channel.overwrites.items():
+        if isinstance(target, discord.Member) and not target.bot:
+            overwrite.send_messages = False
+            try:
+                await channel.set_permissions(target, overwrite=overwrite)
+            except Exception:
+                pass
+
+    await asyncio.sleep(5)
+    try:
+        await channel.delete()
+    except Exception:
+        pass
+
+
+@bot.command(name="kl")
+async def kl_warning(ctx: commands.Context):
+    if not ctx.channel.name.startswith(("buy-", "support-")):
+        await ctx.reply("❌ **هذا الأمر يستخدم فقط داخل قنوات التذاكر.**", mention_author=False)
+        return
+
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+
+    warning_time = discord.utils.utcnow()
+    pending_ticket_warnings[ctx.channel.id] = warning_time
+
+    await ctx.send(
+        "<a:OWNER:1530380061595795526>**في حالة لم يكن هناك رد لمده تتراوح ما بين 30 إلى 60 دقيقة ، سيتم اغلاق التذكره**"
+    )
+
+    asyncio.create_task(_auto_close_after_warning(ctx.channel, warning_time))
 
 @bot.command(name="bnm")
 async def set_buy_category(ctx: commands.Context, category_id: int):
@@ -810,6 +868,7 @@ async def help_command(ctx: commands.Context):
             "`+panel` • إرسال لوحة فتح التذاكر\n"
             "`+claim` • استلام التذكرة الحالية\n"
             "`+close` • إغلاق التذكرة الحالية\n"
+            "`+kl` • تحذير بالإغلاق التلقائي بعد 30-60 دقيقة بدون رد\n"
             "`+addto <@عضو>` • إضافة عضو للتذكرة الحالية\n"
             "`+removeto <@عضو>` • إزالة عضو من التذكرة الحالية\n"
             "`+timer <ساعات>` • بدء مؤقت تسليم الطلب\n"
