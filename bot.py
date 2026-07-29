@@ -3,11 +3,10 @@ import re
 import io
 import json
 import math
-import random
 import asyncio
+import aiohttp
 import discord
-from datetime import timedelta
-from discord.ext import commands, tasks
+from discord.ext import commands
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -15,7 +14,7 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN") or os.getenv("BOT_TOKEN")
 CONFIG_FILE = "config.json"
 CV_LOG_FILE = "cv_log.txt"
-QUICK_REPLIES_FILE = "quick_replies.json"
+SALES_COUNTER_FILE = "sales_counter.json"
 
 # ==== الإعدادات الأساسية ====
 DEFAULT_WELCOME_CHANNEL_ID = 1526255263462461530
@@ -31,18 +30,14 @@ TICKET_NOTIFY_USER_ID = 1426552057984454817
 STAR_EMOJI = "⭐"
 EMBED_COLOR = discord.Color.from_rgb(47, 49, 54)
 
+SOLD_WEBHOOK_URL = "https://discord.com/api/webhooks/1532055087625666780/9PFSY6jSK34UmGPDG3GjSZXxJIevTfLYEJ67WJAHT1qygnZYMKsEhcLmIGrD8i1wL-El"
+
 DEFAULT_PAYMENT_METHODS = {
     "مدار": "لايوجد",
     "ليبيانا": "لايوجد",
     "بايننس": "لايوجد",
     "LTC": "لايوجد",
     "كريديت": "لايوجد"
-}
-
-DEFAULT_QUICK_REPLIES = {
-    "confirm": "✅ **تم تأكيد استلام الدفع، جاري تجهيز طلبك الآن.**",
-    "wrong": "⚠️ **المبلغ المحول غير مطابق، يرجى مراجعة السعر الصحيح وإعادة التحويل.**",
-    "delayed": "⏳ **نعتذر عن التأخير، طلبك سيتم تسليمه خلال أقل وقت ممكن، شكراً لصبرك.**",
 }
 
 AXION_TERMS = (
@@ -54,9 +49,6 @@ AXION_TERMS = (
 
 processing_messages = set()
 invites_cache = {}
-
-# تخزين قيفاويات منتهية عشان يقدر +greroll يعيد السحب عليها
-finished_giveaways = {}
 
 # قنوات تم إشعارها بوضع "غير متوفر" حتى لا يتكرر الإشعار
 away_notified_channels = set()
@@ -109,24 +101,22 @@ if _config_dirty:
     save_config(config)
 
 
-def load_quick_replies():
-    if os.path.exists(QUICK_REPLIES_FILE):
+def load_sales_counter():
+    if os.path.exists(SALES_COUNTER_FILE):
         try:
-            with open(QUICK_REPLIES_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+            with open(SALES_COUNTER_FILE, "r", encoding="utf-8") as f:
+                return int(json.load(f).get("count", 0))
         except Exception:
             pass
-    return dict(DEFAULT_QUICK_REPLIES)
+    return 0
 
 
-def save_quick_replies(data):
-    with open(QUICK_REPLIES_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+def save_sales_counter(count: int):
+    with open(SALES_COUNTER_FILE, "w", encoding="utf-8") as f:
+        json.dump({"count": count}, f, ensure_ascii=False, indent=2)
 
 
-quick_replies = load_quick_replies()
-if not os.path.exists(QUICK_REPLIES_FILE):
-    save_quick_replies(quick_replies)
+sales_counter = load_sales_counter()
 
 
 def log_cv_usage(ctx: commands.Context, authorized: bool):
@@ -162,26 +152,6 @@ def parse_amount(text: str):
         val *= 1_000_000_000
 
     return val if val > 0 else None
-
-
-def parse_time(time_str: str):
-    if not time_str:
-        return None
-    unit = time_str[-1].lower()
-    try:
-        val = int(time_str[:-1])
-    except ValueError:
-        return None
-
-    if unit == "s":
-        return val
-    elif unit == "m":
-        return val * 60
-    elif unit == "h":
-        return val * 3600
-    elif unit == "d":
-        return val * 86400
-    return None
 
 
 # =========================================================
@@ -387,9 +357,6 @@ async def on_ready():
         except Exception:
             pass
 
-    if not check_inactive_tickets.is_running():
-        check_inactive_tickets.start()
-
 
 @bot.event
 async def on_member_join(member: discord.Member):
@@ -429,80 +396,6 @@ async def on_member_join(member: discord.Member):
     await channel.send(content=f"🎉 {member.mention}", embed=embed)
 
 
-# =========================================================
-# ============= معالجة يدوية لأوامر (-) الردود ==============
-# =========================================================
-
-async def handle_dash_commands(message: discord.Message) -> bool:
-    """يعالج -r و -setreply و -delreply يدوياً بدون المرور بنظام commands.
-    يرجع True لو تمت معالجة الرسالة كأمر داش."""
-    content = message.content.strip()
-
-    if content == "-r" or content.startswith("-r "):
-        rest = content[len("-r"):].strip()
-
-        if rest == "":
-            if not quick_replies:
-                await message.channel.send(embed=discord.Embed(description="⚠️ **لا توجد ردود جاهزة محفوظة حالياً.**", color=discord.Color.orange()))
-                return True
-            names = "، ".join(f"`{n}`" for n in quick_replies.keys())
-            embed = discord.Embed(
-                title="⚡ الردود الجاهزة المتوفرة",
-                description=f"استخدم: `-r <الاسم>`\n\n{names}",
-                color=EMBED_COLOR
-            )
-            await message.channel.send(embed=embed)
-            return True
-
-        name = rest.lower()
-        reply_text = quick_replies.get(name)
-        if reply_text is None:
-            await message.channel.send(embed=discord.Embed(description=f"❌ **لا يوجد رد جاهز باسم `{name}`.**\nاستخدم `-r` لعرض القائمة.", color=discord.Color.red()))
-            return True
-
-        try:
-            await message.delete()
-        except Exception:
-            pass
-
-        await message.channel.send(embed=discord.Embed(description=reply_text, color=EMBED_COLOR))
-        return True
-
-    if content.startswith("-setreply "):
-        if not message.author.guild_permissions.administrator:
-            await message.channel.send(embed=discord.Embed(description="❌ **هذا الأمر مخصص فقط لإدارة السيرفر.**", color=discord.Color.red()))
-            return True
-
-        parts = content[len("-setreply "):].strip().split(" ", 1)
-        if len(parts) < 2:
-            await message.channel.send(embed=discord.Embed(description="⚠️ **الاستخدام الصحيح:** `-setreply <اسم> <النص>`", color=discord.Color.orange()))
-            return True
-
-        name, text = parts[0].lower(), parts[1]
-        quick_replies[name] = text
-        save_quick_replies(quick_replies)
-
-        await message.channel.send(embed=discord.Embed(description=f"✅ **تم حفظ الرد الجاهز `{name}` بنجاح.**", color=discord.Color.green()))
-        return True
-
-    if content.startswith("-delreply "):
-        if not message.author.guild_permissions.administrator:
-            await message.channel.send(embed=discord.Embed(description="❌ **هذا الأمر مخصص فقط لإدارة السيرفر.**", color=discord.Color.red()))
-            return True
-
-        name = content[len("-delreply "):].strip().lower()
-        if name not in quick_replies:
-            await message.channel.send(embed=discord.Embed(description=f"❌ **لا يوجد رد جاهز باسم `{name}`.**", color=discord.Color.red()))
-            return True
-
-        del quick_replies[name]
-        save_quick_replies(quick_replies)
-        await message.channel.send(embed=discord.Embed(description=f"🗑️ **تم حذف الرد الجاهز `{name}`.**", color=discord.Color.green()))
-        return True
-
-    return False
-
-
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot or message.guild is None:
@@ -513,11 +406,6 @@ async def on_message(message: discord.Message):
     processing_messages.add(message.id)
 
     try:
-        if message.content.strip().startswith("-"):
-            handled = await handle_dash_commands(message)
-            if handled:
-                return
-
         if message.content.strip() == "شعار":
             await message.reply("𝐌𝐗 |", mention_author=False)
 
@@ -869,41 +757,6 @@ async def sal_command(ctx: commands.Context):
     await ctx.send(embed=embed)
 
 
-@tasks.loop(hours=1)
-async def check_inactive_tickets():
-    now = discord.utils.utcnow()
-    for guild in bot.guilds:
-        for channel in guild.text_channels:
-            if channel.name.startswith(("buy-", "support-")):
-                try:
-                    history = [m async for m in channel.history(limit=1)]
-                    if not history:
-                        continue
-
-                    last_msg = history[0]
-                    if (now - last_msg.created_at).total_seconds() >= 86400:
-                        ticket_owner = None
-                        for target in channel.overwrites:
-                            if isinstance(target, discord.Member) and not target.bot:
-                                ticket_owner = target
-                                break
-
-                        if ticket_owner:
-                            embed = discord.Embed(
-                                title="⌛ تذكير بتذكرة خاملة",
-                                description=(
-                                    f"مرحباً {ticket_owner.mention} 👋\n\n"
-                                    f"لاحظنا عدم وجود أي تفاعل في التذكرة منذ 24 ساعة.\n"
-                                    f"يرجى توضيح طلبك أو الرد للربط مع فريق الدعم والإدارة."
-                                ),
-                                color=discord.Color.orange()
-                            )
-                            embed.set_footer(text=f"{guild.name} • Auto Reminder System")
-                            await channel.send(content=f"🔔 {ticket_owner.mention}", embed=embed)
-                except Exception as e:
-                    print(f"خطأ أثناء فحص التذكرة {channel.name}: {e}")
-
-
 @bot.command(name="clear")
 async def clear_messages(ctx: commands.Context, amount: int = 100):
     try:
@@ -997,7 +850,7 @@ async def give_customer_role(ctx: commands.Context, member: discord.Member):
 async def help_command(ctx: commands.Context):
     embed = discord.Embed(
         title="⚙️ لوحة الأوامر والتحكم الكاملة",
-        description="البريفكس المعتمد: `+` للأوامر العامة، `-` لأوامر الردود الجاهزة.\n*معظم الأوامر مخصصة لإدارة السيرفر (باستثناء `+cv`, `+close`, `+claim`).*",
+        description="البريفكس المعتمد: `+` لجميع الأوامر.\n*معظم الأوامر مخصصة لإدارة السيرفر (باستثناء `+cv`, `+close`, `+claim`).*",
         color=EMBED_COLOR,
     )
 
@@ -1041,20 +894,16 @@ async def help_command(ctx: commands.Context):
         inline=False
     )
     embed.add_field(
-        name="⚡ الردود الجاهزة",
+        name="💰 نظام المبيعات",
         value=(
-            "`-r` • عرض قائمة كل الردود الجاهزة\n"
-            "`-r <اسم>` • إرسال رد جاهز\n"
-            "`-setreply <اسم> <النص>` • إضافة أو تعديل رد جاهز\n"
-            "`-delreply <اسم>` • حذف رد جاهز"
+            "`+sold \"المنتج\" <@المشتري>` • تسجيل عملية بيع وإرسالها لقناة المبيعات\n"
+            "(ضع اسم المنتج بين علامتي اقتباس إن كان يحتوي على أكثر من كلمة)"
         ),
         inline=False
     )
     embed.add_field(
-        name="🎉 الفعاليات والبرودكاست",
+        name="📢 البرودكاست",
         value=(
-            "`+giveaway <الوقت> <الجائزة> <عدد الفائزين>` • بدء مسابقة قيفاوي\n"
-            "`+greroll <ID الرسالة> [عدد الفائزين]` • إعادة سحب فائز جديد\n"
             "`+bc <@العضو> <الرسالة>` • رسالة خاصة لشخص واحد\n"
             "`+bcall <الرسالة>` • رسالة خاصة للجميع\n"
             "`+bc-role <@الرتبة> <الرسالة>` • رسالة خاصة لرتبة محددة\n"
@@ -1339,6 +1188,60 @@ async def rate_prefix(ctx: commands.Context, buyer: discord.Member, *, product: 
 
 
 # =========================================================
+# =================== نظام تسجيل المبيعات: +sold ===================
+# =========================================================
+
+@bot.command(name="sold")
+async def sold_command(ctx: commands.Context, product: str, buyer: discord.Member):
+    """
+    الاستخدام: +sold "اسم المنتج" @المشتري
+    (استخدم علامتي اقتباس حول اسم المنتج إذا كان يحتوي على أكثر من كلمة)
+    """
+    global sales_counter
+
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+
+    sales_counter += 1
+    save_sales_counter(sales_counter)
+    order_number = f"AX-{sales_counter:05d}"
+
+    embed = discord.Embed(
+        title="🧾 تأكيد عملية بيع جديدة",
+        description=f"تم إتمام عملية بيع بنجاح عبر **𝐀𝐱𝐢𝐨𝐧 𝐒𝐭𝐨𝐫𝐞**",
+        color=discord.Color.from_rgb(46, 204, 113)
+    )
+    embed.add_field(name="🏷️ المنتج", value=f"```{product}```", inline=False)
+    embed.add_field(name="👤 المشتري", value=buyer.mention, inline=True)
+    embed.add_field(name="🧑‍💼 البائع", value=ctx.author.mention, inline=True)
+    embed.add_field(name="🔢 رقم العملية", value=f"`{order_number}`", inline=False)
+    embed.set_thumbnail(url=buyer.display_avatar.url)
+    embed.set_author(name="Axion Store • Sales System", icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
+    embed.set_footer(text=f"{ctx.guild.name} • تم التسجيل بواسطة {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
+    embed.timestamp = discord.utils.utcnow()
+
+    sent_ok = True
+    try:
+        async with aiohttp.ClientSession() as session:
+            webhook = discord.Webhook.from_url(SOLD_WEBHOOK_URL, session=session)
+            await webhook.send(
+                embed=embed,
+                username="Axion Store | Sales",
+                avatar_url=ctx.guild.icon.url if ctx.guild.icon else None
+            )
+    except Exception as e:
+        sent_ok = False
+        print(f"خطأ أثناء إرسال ويبهوك عملية البيع: {e}")
+
+    if sent_ok:
+        await ctx.send(embed=discord.Embed(description=f"✅ **تم تسجيل عملية البيع بنجاح، رقم العملية:** `{order_number}`", color=discord.Color.green()))
+    else:
+        await ctx.send(embed=discord.Embed(description=f"⚠️ **تم تسجيل عملية البيع رقم `{order_number}` محلياً، لكن تعذر إرسالها عبر الويبهوك.**", color=discord.Color.orange()))
+
+
+# =========================================================
 # ==================== أوامر الـ Say =====================
 # =========================================================
 
@@ -1384,137 +1287,6 @@ async def say_photo(ctx: commands.Context, *, message: str = None):
         await ctx.send(content=message, file=file)
     else:
         await ctx.send(file=file)
-
-
-# =========================================================
-# ====================== نظام القيفاوي =====================
-# =========================================================
-
-def build_giveaway_embed(prize: str, winners_count: int, organizer: discord.Member, end_timestamp: int, participants_count: int, guild: discord.Guild, ended: bool = False) -> discord.Embed:
-    title = "🎉 انتهت المسابقة! 🎉" if ended else "🎉 سحب على مسابقة جديدة! 🎉"
-    time_line = "⏰ **انتهت المسابقة**" if ended else f"⏰ **ينتهي في:** <t:{end_timestamp}:R>"
-
-    embed = discord.Embed(
-        title=title,
-        description=(
-            f"🎁 **الجائزة:** `{prize}`\n"
-            f"👥 **عدد الفائزين:** `{winners_count}`\n"
-            f"👑 **المنظم:** {organizer.mention}\n"
-            f"🙋‍♂️ **عدد المشاركين:** `{participants_count}`\n\n"
-            f"{time_line}"
-        ),
-        color=EMBED_COLOR
-    )
-    embed.set_footer(text=f"{guild.name} • Giveaway System", icon_url=guild.icon.url if guild.icon else None)
-    return embed
-
-
-class GiveawayView(discord.ui.View):
-    def __init__(self, prize: str, winners_count: int, organizer: discord.Member, end_timestamp: int, guild: discord.Guild):
-        super().__init__(timeout=None)
-        self.entries = set()
-        self.prize = prize
-        self.winners_count = winners_count
-        self.organizer = organizer
-        self.end_timestamp = end_timestamp
-        self.guild = guild
-
-    @discord.ui.button(label="المشاركة بالمسابقة", emoji="🎉", style=discord.ButtonStyle.success, custom_id="join_giveaway")
-    async def join_giveaway(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id in self.entries:
-            self.entries.remove(interaction.user.id)
-            await interaction.response.send_message("❌ **تم إلغاء مشاركتك في المسابقة.**", ephemeral=True)
-        else:
-            self.entries.add(interaction.user.id)
-            await interaction.response.send_message("🎉 **تم تسجيل مشاركتك بنجاح! بالتوفيق.**", ephemeral=True)
-
-        updated_embed = build_giveaway_embed(
-            self.prize, self.winners_count, self.organizer, self.end_timestamp, len(self.entries), self.guild
-        )
-        try:
-            await interaction.message.edit(embed=updated_embed)
-        except Exception:
-            pass
-
-
-@bot.command(name="giveaway")
-async def giveaway(ctx: commands.Context, duration: str, prize: str, winners_count: int = 1):
-    try:
-        await ctx.message.delete()
-    except Exception:
-        pass
-
-    seconds = parse_time(duration)
-    if seconds is None:
-        await ctx.send(embed=discord.Embed(description="⚠️ **صيغة الوقت غير صحيحة! استخدم مثلاً:** `4m` أو `1h` أو `30s`", color=discord.Color.orange()))
-        return
-
-    end_time = discord.utils.utcnow() + timedelta(seconds=seconds)
-    end_timestamp = int(end_time.timestamp())
-
-    view = GiveawayView(prize, winners_count, ctx.author, end_timestamp, ctx.guild)
-    embed = build_giveaway_embed(prize, winners_count, ctx.author, end_timestamp, 0, ctx.guild)
-
-    msg = await ctx.send(embed=embed, view=view)
-
-    await asyncio.sleep(seconds)
-
-    if not view.entries:
-        end_embed = discord.Embed(
-            title="🎉 انتهت المسابقة 🎉",
-            description=f"🎁 **الجائزة:** `{prize}`\n\n❌ **لم يشارك أحد في المسابقة.**",
-            color=discord.Color.red()
-        )
-        await msg.edit(embed=end_embed, view=None)
-        return
-
-    winner_ids = list(view.entries)
-    actual_winners_count = min(winners_count, len(winner_ids))
-    winner_mentions = random.sample(winner_ids, actual_winners_count)
-    winners_text = ", ".join([f"<@{w_id}>" for w_id in winner_mentions])
-
-    end_embed = discord.Embed(
-        title="🎉 انتهت المسابقة! 🎉",
-        description=(
-            f"🎁 **الجائزة:** `{prize}`\n"
-            f"🏆 **الفائزون:** {winners_text}\n"
-            f"👑 **المنظم:** {ctx.author.mention}\n"
-            f"🙋‍♂️ **إجمالي المشاركين:** `{len(view.entries)}`"
-        ),
-        color=EMBED_COLOR
-    )
-    await msg.edit(embed=end_embed, view=None)
-    await ctx.send(f"🎊 **ألف مبروك للفائزين:** {winners_text} 🎉\nلقد فزتم بـ **{prize}**!")
-
-    finished_giveaways[msg.id] = {
-        "prize": prize,
-        "entries": list(view.entries),
-        "channel_id": ctx.channel.id,
-    }
-
-
-@bot.command(name="greroll")
-async def greroll(ctx: commands.Context, message_id: int, winners_count: int = 1):
-    data = finished_giveaways.get(message_id)
-    if data is None:
-        await ctx.reply(embed=discord.Embed(description="❌ **لم يتم العثور على قيفاوي منتهي بهذا الآيدي.**", color=discord.Color.red()), mention_author=False)
-        return
-
-    entries = data["entries"]
-    if not entries:
-        await ctx.reply(embed=discord.Embed(description="❌ **لا يوجد مشاركين لإعادة السحب عليهم.**", color=discord.Color.red()), mention_author=False)
-        return
-
-    actual_winners_count = min(winners_count, len(entries))
-    new_winners = random.sample(entries, actual_winners_count)
-    winners_text = ", ".join([f"<@{w_id}>" for w_id in new_winners])
-
-    embed = discord.Embed(
-        title="🔄 إعادة سحب المسابقة",
-        description=f"🎁 **الجائزة:** `{data['prize']}`\n🏆 **الفائز الجديد:** {winners_text}",
-        color=EMBED_COLOR
-    )
-    await ctx.send(f"🎊 **مبروك للفائز الجديد:** {winners_text} 🎉", embed=embed)
 
 
 # =========================================================
