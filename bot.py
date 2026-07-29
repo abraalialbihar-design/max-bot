@@ -15,6 +15,7 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN") or os.getenv("BOT_TOKEN")
 CONFIG_FILE = "config.json"
 CV_LOG_FILE = "cv_log.txt"
+QUICK_REPLIES_FILE = "quick_replies.json"
 
 # ==== الإعدادات الأساسية ====
 DEFAULT_WELCOME_CHANNEL_ID = 1526255263462461530
@@ -38,6 +39,12 @@ DEFAULT_PAYMENT_METHODS = {
     "كريديت": "لايوجد"
 }
 
+DEFAULT_QUICK_REPLIES = {
+    "confirm": "✅ **تم تأكيد استلام الدفع، جاري تجهيز طلبك الآن.**",
+    "wrong": "⚠️ **المبلغ المحول غير مطابق، يرجى مراجعة السعر الصحيح وإعادة التحويل.**",
+    "delayed": "⏳ **نعتذر عن التأخير، طلبك سيتم تسليمه خلال أقل وقت ممكن، شكراً لصبرك.**",
+}
+
 AXION_TERMS = (
     "**1️⃣ -** يمنع طلب استبدال السلعة او استرداد الاموال بعد شرائك شي من المتجر ويجب أن تكون متأكدا قبل شرائك.\n\n"
     "**2️⃣ -** لا يحق للعميل طلب تخفيض سعر او شيء مجاني من المتجر.\n\n"
@@ -47,6 +54,12 @@ AXION_TERMS = (
 
 processing_messages = set()
 invites_cache = {}
+
+# تخزين قيفاويات منتهية عشان يقدر +greroll يعيد السحب عليها
+finished_giveaways = {}
+
+# قنوات تم إشعارها بوضع "غير متوفر" حتى لا يتكرر الإشعار
+away_notified_channels = set()
 
 
 def load_config():
@@ -63,6 +76,10 @@ def load_config():
         "buy_category_id": None,
         "support_category_id": None,
         "payment_methods": DEFAULT_PAYMENT_METHODS,
+        "auto_reaction_channel_id": None,
+        "auto_reaction_emoji": None,
+        "away_mode": False,
+        "away_reason": None,
     }
 
 
@@ -76,8 +93,40 @@ _config_dirty = False
 if "payment_methods" not in config:
     config["payment_methods"] = DEFAULT_PAYMENT_METHODS
     _config_dirty = True
+if "auto_reaction_channel_id" not in config:
+    config["auto_reaction_channel_id"] = None
+    _config_dirty = True
+if "auto_reaction_emoji" not in config:
+    config["auto_reaction_emoji"] = None
+    _config_dirty = True
+if "away_mode" not in config:
+    config["away_mode"] = False
+    _config_dirty = True
+if "away_reason" not in config:
+    config["away_reason"] = None
+    _config_dirty = True
 if _config_dirty:
     save_config(config)
+
+
+def load_quick_replies():
+    if os.path.exists(QUICK_REPLIES_FILE):
+        try:
+            with open(QUICK_REPLIES_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return dict(DEFAULT_QUICK_REPLIES)
+
+
+def save_quick_replies(data):
+    with open(QUICK_REPLIES_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+quick_replies = load_quick_replies()
+if not os.path.exists(QUICK_REPLIES_FILE):
+    save_quick_replies(quick_replies)
 
 
 def log_cv_usage(ctx: commands.Context, authorized: bool):
@@ -159,6 +208,7 @@ class TicketControlView(discord.ui.View):
                 except Exception:
                     pass
 
+        away_notified_channels.discard(interaction.channel.id)
         await asyncio.sleep(5)
         try:
             await interaction.channel.delete()
@@ -241,6 +291,15 @@ class TicketSetupView(discord.ui.View):
 
         mention_content = f"{member.mention} <@&{role_id}>"
         await ticket_channel.send(content=mention_content, embed=embed, view=TicketControlView())
+
+        if config.get("away_mode"):
+            reason = config.get("away_reason") or "غير محدد"
+            away_embed = discord.Embed(
+                description=f"🌙 **البائع غير متوفر حالياً.**\n📌 **السبب:** {reason}\nسيتم الرد عليك في أقرب وقت ممكن، شكراً لصبرك.",
+                color=discord.Color.orange()
+            )
+            await ticket_channel.send(embed=away_embed)
+            away_notified_channels.add(ticket_channel.id)
 
         try:
             notify_user = guild.get_member(TICKET_NOTIFY_USER_ID) or await guild.fetch_member(TICKET_NOTIFY_USER_ID)
@@ -370,6 +429,80 @@ async def on_member_join(member: discord.Member):
     await channel.send(content=f"🎉 {member.mention}", embed=embed)
 
 
+# =========================================================
+# ============= معالجة يدوية لأوامر (-) الردود ==============
+# =========================================================
+
+async def handle_dash_commands(message: discord.Message) -> bool:
+    """يعالج -r و -setreply و -delreply يدوياً بدون المرور بنظام commands.
+    يرجع True لو تمت معالجة الرسالة كأمر داش."""
+    content = message.content.strip()
+
+    if content == "-r" or content.startswith("-r "):
+        rest = content[len("-r"):].strip()
+
+        if rest == "":
+            if not quick_replies:
+                await message.channel.send(embed=discord.Embed(description="⚠️ **لا توجد ردود جاهزة محفوظة حالياً.**", color=discord.Color.orange()))
+                return True
+            names = "، ".join(f"`{n}`" for n in quick_replies.keys())
+            embed = discord.Embed(
+                title="⚡ الردود الجاهزة المتوفرة",
+                description=f"استخدم: `-r <الاسم>`\n\n{names}",
+                color=EMBED_COLOR
+            )
+            await message.channel.send(embed=embed)
+            return True
+
+        name = rest.lower()
+        reply_text = quick_replies.get(name)
+        if reply_text is None:
+            await message.channel.send(embed=discord.Embed(description=f"❌ **لا يوجد رد جاهز باسم `{name}`.**\nاستخدم `-r` لعرض القائمة.", color=discord.Color.red()))
+            return True
+
+        try:
+            await message.delete()
+        except Exception:
+            pass
+
+        await message.channel.send(embed=discord.Embed(description=reply_text, color=EMBED_COLOR))
+        return True
+
+    if content.startswith("-setreply "):
+        if not message.author.guild_permissions.administrator:
+            await message.channel.send(embed=discord.Embed(description="❌ **هذا الأمر مخصص فقط لإدارة السيرفر.**", color=discord.Color.red()))
+            return True
+
+        parts = content[len("-setreply "):].strip().split(" ", 1)
+        if len(parts) < 2:
+            await message.channel.send(embed=discord.Embed(description="⚠️ **الاستخدام الصحيح:** `-setreply <اسم> <النص>`", color=discord.Color.orange()))
+            return True
+
+        name, text = parts[0].lower(), parts[1]
+        quick_replies[name] = text
+        save_quick_replies(quick_replies)
+
+        await message.channel.send(embed=discord.Embed(description=f"✅ **تم حفظ الرد الجاهز `{name}` بنجاح.**", color=discord.Color.green()))
+        return True
+
+    if content.startswith("-delreply "):
+        if not message.author.guild_permissions.administrator:
+            await message.channel.send(embed=discord.Embed(description="❌ **هذا الأمر مخصص فقط لإدارة السيرفر.**", color=discord.Color.red()))
+            return True
+
+        name = content[len("-delreply "):].strip().lower()
+        if name not in quick_replies:
+            await message.channel.send(embed=discord.Embed(description=f"❌ **لا يوجد رد جاهز باسم `{name}`.**", color=discord.Color.red()))
+            return True
+
+        del quick_replies[name]
+        save_quick_replies(quick_replies)
+        await message.channel.send(embed=discord.Embed(description=f"🗑️ **تم حذف الرد الجاهز `{name}`.**", color=discord.Color.green()))
+        return True
+
+    return False
+
+
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot or message.guild is None:
@@ -380,6 +513,11 @@ async def on_message(message: discord.Message):
     processing_messages.add(message.id)
 
     try:
+        if message.content.strip().startswith("-"):
+            handled = await handle_dash_commands(message)
+            if handled:
+                return
+
         if message.content.strip() == "شعار":
             await message.reply("𝐌𝐗 |", mention_author=False)
 
@@ -390,6 +528,30 @@ async def on_message(message: discord.Message):
                 total_with_tax = math.ceil(amount / 0.95)
                 embed = discord.Embed(description=f"💳 **المبلغ مع الضريبة:**\n### `{total_with_tax:,}`", color=EMBED_COLOR)
                 await message.reply(embed=embed, mention_author=False)
+
+        auto_channel_id = config.get("auto_reaction_channel_id")
+        auto_emoji = config.get("auto_reaction_emoji")
+        if auto_channel_id and auto_emoji and message.channel.id == auto_channel_id:
+            try:
+                emoji_obj = discord.PartialEmoji.from_str(auto_emoji)
+                await message.add_reaction(emoji_obj)
+            except Exception as e:
+                print(f"خطأ أثناء إضافة الريأكشن التلقائي: {e}")
+
+        if (
+            config.get("away_mode")
+            and message.channel.name.startswith(("buy-", "support-"))
+            and not message.author.guild_permissions.administrator
+            and message.channel.id not in away_notified_channels
+            and not message.content.startswith("+")
+        ):
+            reason = config.get("away_reason") or "غير محدد"
+            away_embed = discord.Embed(
+                description=f"🌙 **البائع غير متوفر حالياً.**\n📌 **السبب:** {reason}\nسيتم الرد عليك في أقرب وقت ممكن، شكراً لصبرك.",
+                color=discord.Color.orange()
+            )
+            await message.channel.send(embed=away_embed)
+            away_notified_channels.add(message.channel.id)
 
         await bot.process_commands(message)
     finally:
@@ -545,6 +707,7 @@ async def close_ticket_cmd(ctx: commands.Context):
             except Exception:
                 pass
 
+    away_notified_channels.discard(ctx.channel.id)
     await asyncio.sleep(5)
     try:
         await ctx.channel.delete()
@@ -594,6 +757,55 @@ async def set_support_category(ctx: commands.Context, category_id: int):
     await ctx.reply(embed=discord.Embed(description=f"✅ **تم اعتماد الكاتيجوري `{category.name}` لتذاكر الدعم الفني.**", color=discord.Color.green()), mention_author=False)
 
 
+@bot.command(name="auto-setup")
+async def auto_setup(ctx: commands.Context, channel_id: int, emoji: str):
+    channel = ctx.guild.get_channel(channel_id)
+    if channel is None:
+        await ctx.reply(embed=discord.Embed(description="❌ **لم يتم العثور على القناة المحددة.**", color=discord.Color.red()), mention_author=False)
+        return
+
+    try:
+        parsed_emoji = discord.PartialEmoji.from_str(emoji)
+    except Exception:
+        await ctx.reply(embed=discord.Embed(description="❌ **الإيموجي المدخل غير صالح.**", color=discord.Color.red()), mention_author=False)
+        return
+
+    config["auto_reaction_channel_id"] = channel.id
+    config["auto_reaction_emoji"] = str(parsed_emoji)
+    save_config(config)
+
+    await ctx.reply(
+        embed=discord.Embed(
+            description=f"✅ **تم تفعيل الرياكشن التلقائي {parsed_emoji} على كل رسالة في {channel.mention}**",
+            color=discord.Color.green()
+        ),
+        mention_author=False
+    )
+
+
+@bot.command(name="away")
+async def away_command(ctx: commands.Context, *, reason: str = None):
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+
+    if reason and reason.strip().lower() in ("off", "back", "رجعت"):
+        config["away_mode"] = False
+        config["away_reason"] = None
+        save_config(config)
+        away_notified_channels.clear()
+        await ctx.send(embed=discord.Embed(description="🟢 **تم إلغاء وضع الغياب، أنت متوفر الآن.**", color=discord.Color.green()))
+        return
+
+    config["away_mode"] = True
+    config["away_reason"] = reason.strip() if reason else "غير محدد"
+    save_config(config)
+    away_notified_channels.clear()
+
+    await ctx.send(embed=discord.Embed(description=f"🌙 **تم تفعيل وضع الغياب.**\n📌 **السبب:** {config['away_reason']}\nسيتم إشعار العملاء تلقائياً في التذاكر.", color=discord.Color.orange()))
+
+
 @bot.command(name="sal")
 async def sal_command(ctx: commands.Context):
     try:
@@ -637,6 +849,14 @@ async def sal_command(ctx: commands.Context):
         results.append(f"✅ **قناة حساب الضريبة →** {tax_ch.mention}")
     else:
         results.append("❌ **لم يتم العثور على قناة الضريبة (تأكد من الآيدي).**")
+
+    auto_react_ch = ctx.guild.get_channel(1525251733046038528)
+    if auto_react_ch:
+        config["auto_reaction_channel_id"] = auto_react_ch.id
+        config["auto_reaction_emoji"] = "<a:emoji_name:1531241613182107758>"
+        results.append(f"✅ **قناة الرياكشن التلقائي →** {auto_react_ch.mention}")
+    else:
+        results.append("❌ **لم يتم العثور على قناة الرياكشن التلقائي (تأكد من الآيدي).**")
 
     save_config(config)
 
@@ -777,7 +997,7 @@ async def give_customer_role(ctx: commands.Context, member: discord.Member):
 async def help_command(ctx: commands.Context):
     embed = discord.Embed(
         title="⚙️ لوحة الأوامر والتحكم الكاملة",
-        description="البريفكس المعتمد: `+`\n*معظم الأوامر مخصصة لإدارة السيرفر (باستثناء `+cv`, `+close`, `+claim`).*",
+        description="البريفكس المعتمد: `+` للأوامر العامة، `-` لأوامر الردود الجاهزة.\n*معظم الأوامر مخصصة لإدارة السيرفر (باستثناء `+cv`, `+close`, `+claim`).*",
         color=EMBED_COLOR,
     )
 
@@ -792,7 +1012,8 @@ async def help_command(ctx: commands.Context):
             "`+say <الرسالة>` • إرسال نص باسم البوت\n"
             "`+say-embed <الرسالة>` • إرسال إيمبد منسق\n"
             "`+say-photo <الرسالة>` • إرسال صورة مرفقة مع نص\n"
-            "`+invites [@عضو]` • عرض عدد دعوات عضو"
+            "`+invites [@عضو]` • عرض عدد دعوات عضو\n"
+            "`+away [سبب/off]` • تفعيل أو إلغاء وضع الغياب"
         ),
         inline=False
     )
@@ -812,6 +1033,7 @@ async def help_command(ctx: commands.Context):
             "`+setpay` • إعداد وتحديث طرق الدفع\n"
             "`+pay` • عرض طرق الدفع الحالية\n"
             "`+tax [ID]` • تعيين روم حساب الضريبة\n"
+            "`+auto-setup <ID> <إيموجي>` • تفعيل ريأكشن تلقائي على قناة معينة\n"
             "`+rate <@المشتري> <المنتج>` • طلب تقييم من المشتري\n"
             "`+rate-setup <ID>` • تعيين روم التقييمات\n"
             "`+setup-welcome <ID>` • تعيين روم الترحيب"
@@ -819,9 +1041,20 @@ async def help_command(ctx: commands.Context):
         inline=False
     )
     embed.add_field(
+        name="⚡ الردود الجاهزة",
+        value=(
+            "`-r` • عرض قائمة كل الردود الجاهزة\n"
+            "`-r <اسم>` • إرسال رد جاهز\n"
+            "`-setreply <اسم> <النص>` • إضافة أو تعديل رد جاهز\n"
+            "`-delreply <اسم>` • حذف رد جاهز"
+        ),
+        inline=False
+    )
+    embed.add_field(
         name="🎉 الفعاليات والبرودكاست",
         value=(
             "`+giveaway <الوقت> <الجائزة> <عدد الفائزين>` • بدء مسابقة قيفاوي\n"
+            "`+greroll <ID الرسالة> [عدد الفائزين]` • إعادة سحب فائز جديد\n"
             "`+bc <@العضو> <الرسالة>` • رسالة خاصة لشخص واحد\n"
             "`+bcall <الرسالة>` • رسالة خاصة للجميع\n"
             "`+bc-role <@الرتبة> <الرسالة>` • رسالة خاصة لرتبة محددة\n"
@@ -1252,6 +1485,36 @@ async def giveaway(ctx: commands.Context, duration: str, prize: str, winners_cou
     )
     await msg.edit(embed=end_embed, view=None)
     await ctx.send(f"🎊 **ألف مبروك للفائزين:** {winners_text} 🎉\nلقد فزتم بـ **{prize}**!")
+
+    finished_giveaways[msg.id] = {
+        "prize": prize,
+        "entries": list(view.entries),
+        "channel_id": ctx.channel.id,
+    }
+
+
+@bot.command(name="greroll")
+async def greroll(ctx: commands.Context, message_id: int, winners_count: int = 1):
+    data = finished_giveaways.get(message_id)
+    if data is None:
+        await ctx.reply(embed=discord.Embed(description="❌ **لم يتم العثور على قيفاوي منتهي بهذا الآيدي.**", color=discord.Color.red()), mention_author=False)
+        return
+
+    entries = data["entries"]
+    if not entries:
+        await ctx.reply(embed=discord.Embed(description="❌ **لا يوجد مشاركين لإعادة السحب عليهم.**", color=discord.Color.red()), mention_author=False)
+        return
+
+    actual_winners_count = min(winners_count, len(entries))
+    new_winners = random.sample(entries, actual_winners_count)
+    winners_text = ", ".join([f"<@{w_id}>" for w_id in new_winners])
+
+    embed = discord.Embed(
+        title="🔄 إعادة سحب المسابقة",
+        description=f"🎁 **الجائزة:** `{data['prize']}`\n🏆 **الفائز الجديد:** {winners_text}",
+        color=EMBED_COLOR
+    )
+    await ctx.send(f"🎊 **مبروك للفائز الجديد:** {winners_text} 🎉", embed=embed)
 
 
 # =========================================================
