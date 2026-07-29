@@ -54,17 +54,53 @@ AXION_TERMS = (
 # =========================================================
 # كل قسم = زر مستقل في اللوحة. الحقل "prefix" يُستخدم في اسم
 # قناة التذكرة (مثال: fivem-0001) وفي عدّاد التذاكر الخاص به.
+# الحقل "desc" هو سطر الشرح الذي يظهر في الإيمبد فوق زر هذا القسم مباشرة.
 TICKET_CATEGORIES = [
-    {"key": "robux",     "label": "روبوكس",                          "emoji": "<:Robux:1530419657209548841>",       "prefix": "ROBUX",     "needs_username": True},
-    {"key": "fivem",     "label": "فايف ام",                          "emoji": "<:FIVEM:1530421877443530863>",       "prefix": "FIVEM",     "needs_username": False},
-    {"key": "credit",    "label": "كريدت",                            "emoji": "<:Pro:1530379178635952200>",         "prefix": "CREDIT",    "needs_username": False},
-    {"key": "hypesquad", "label": "هايب سكواد",                       "emoji": "<a:hypesquad:1531633034141630537>",  "prefix": "HYPESQUAD", "needs_username": False},
-    {"key": "hosting",   "label": "استضافة",                          "emoji": "<:OX_HOST:1532158984734375986>",     "prefix": "HOST",      "needs_username": False},
-    {"key": "snapchat",  "label": "سناب شات",                         "emoji": "<:5378_snapchat:1532159134382686288>", "prefix": "SNAP",    "needs_username": False},
-    {"key": "dev",       "label": "برمجة",                            "emoji": "<:dev:1530379905148260542>",         "prefix": "DEV",       "needs_username": False},
-    {"key": "windows",   "label": "تفعيل ويندوز",                     "emoji": "<:windows10100:1532163510753165443>", "prefix": "WINDOWS", "needs_username": False},
-    {"key": "discord",   "label": "ديسكورد (نيترو / بوستات / افكتات)", "emoji": "<a:AT_Discord:1532164241270902854>", "prefix": "DISCORD",   "needs_username": False},
-    {"key": "inquiry",   "label": "استفسار عن منتج",                  "emoji": "❓",                                   "prefix": "INQUIRY",   "needs_username": False},
+    {
+        "key": "inquiry", "label": "استفسار على منتج",
+        "emoji": "<:Support:1532171575653302397>", "prefix": "INQUIRY", "needs_username": False,
+        "desc": "لو حاب تستفسر عن اي شيء يخص المتجر او يخص منتج يمكنك الضغط على زر إستفسار على منتج",
+    },
+    {
+        "key": "fivem", "label": "Fivem",
+        "emoji": "<:FIVEM:1530421877443530863>", "prefix": "FIVEM", "needs_username": False,
+        "desc": "لو حاب تشتري حساب فايف ام او اي شيء ليه علاقة به اضغط علي",
+    },
+    {
+        "key": "discord", "label": "Discord",
+        "emoji": "<a:AT_Discord:1532164241270902854>", "prefix": "DISCORD", "needs_username": False,
+        "desc": "لو حاب تشتري اي شيء يتعلق بالديسكورد من نيترو، بوستات، افكتات، او هايب سكواد اضغط علي",
+    },
+    {
+        "key": "robux", "label": "Robux",
+        "emoji": "<:Robux:1530419657209548841>", "prefix": "ROBUX", "needs_username": True,
+        "desc": "لو حاب تشتري او تستفسر عن اي شيء يخص حساب او منتجات روبوكس اضغط علي",
+    },
+    {
+        "key": "credit", "label": "Credit",
+        "emoji": "<:Pro:1530379178635952200>", "prefix": "CREDIT", "needs_username": False,
+        "desc": "لو حاب تشتري كريدت او رصيد اضغط علي",
+    },
+    {
+        "key": "hosting", "label": "Hosting",
+        "emoji": "<:OX_HOST:1532158984734375986>", "prefix": "HOST", "needs_username": False,
+        "desc": "لو حاب تشتري استضافة او تستفسر عنها اضغط علي",
+    },
+    {
+        "key": "snapchat", "label": "Snapchat",
+        "emoji": "<:5378_snapchat:1532159134382686288>", "prefix": "SNAP", "needs_username": False,
+        "desc": "لو حاب تشتري حساب سناب شات او اي شيء يخصه اضغط علي",
+    },
+    {
+        "key": "dev", "label": "Dev",
+        "emoji": "<:dev:1530379905148260542>", "prefix": "DEV", "needs_username": False,
+        "desc": "لو حاب تطلب خدمة برمجة او بوت مخصص اضغط علي",
+    },
+    {
+        "key": "windows", "label": "Windows",
+        "emoji": "<:windows10100:1532163510753165443>", "prefix": "WINDOWS", "needs_username": False,
+        "desc": "لو حاب تفعل نسخة ويندوز اضغط علي",
+    },
 ]
 TICKET_PREFIXES = tuple(f"{c['prefix'].lower()}-" for c in TICKET_CATEGORIES)
 TICKET_CATEGORY_BY_KEY = {c["key"]: c for c in TICKET_CATEGORIES}
@@ -372,12 +408,13 @@ class RobuxUsernameModal(discord.ui.Modal, title="بيانات حساب الرو
 
 
 class ServiceTicketButton(discord.ui.Button):
-    def __init__(self, category: dict):
+    def __init__(self, category: dict, row: int = None):
         super().__init__(
             label=category["label"],
             emoji=category["emoji"],
             style=discord.ButtonStyle.primary,
-            custom_id=f"ticket_btn_{category['key']}"
+            custom_id=f"ticket_btn_{category['key']}",
+            row=row
         )
         self.category = category
 
@@ -392,8 +429,10 @@ class ServiceTicketButton(discord.ui.Button):
 class TicketSetupView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
-        for category in TICKET_CATEGORIES:
-            self.add_item(ServiceTicketButton(category))
+        # ديسكورد يسمح بحد أقصى 5 صفوف للأزرار، لذلك نضع زرّين في كل صف
+        # حتى تظهر الأزرار بترتيب أقرب لترتيب سطور الشرح في الإيمبد بالأعلى.
+        for index, category in enumerate(TICKET_CATEGORIES):
+            self.add_item(ServiceTicketButton(category, row=index // 2))
 
 
 # =========================================================
@@ -1142,14 +1181,14 @@ async def panel_command(ctx: commands.Context):
     except Exception:
         pass
 
-    categories_lines = "\n".join(f"{cat['emoji']} **{cat['label']}**" for cat in TICKET_CATEGORIES)
+    categories_lines = "\n\n".join(
+        f"{cat['desc']} {cat['emoji']}" for cat in TICKET_CATEGORIES
+    )
 
     embed = discord.Embed(
         title="🎫 مركز الطلبات والاستفسارات - 𝐀𝐱𝐢𝐨𝐧 𝐒𝐭𝐨𝐫𝐞",
         description=(
-            "لو حاب تستفسر عن اي شيء يخص المتجر او يخص منتج يمكنك الضغط على زر **استفسار عن منتج** ⬇️\n\n"
             f"{categories_lines}\n\n"
-            "📝 اضغط على الزر المناسب لطلبك وسيتم فتح تذكرة خاصة بك فوراً.\n"
             "⚠️ *ملاحظة: يحق لك فتح تذكرة واحدة فقط في نفس الوقت.*"
         ),
         color=TICKET_EMBED_COLOR
