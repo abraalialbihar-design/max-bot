@@ -15,7 +15,6 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN") or os.getenv("BOT_TOKEN")
 CONFIG_FILE = "config.json"
 CV_LOG_FILE = "cv_log.txt"
-INVITE_LOG_FILE = "invite_log.json"
 
 # ==== الإعدادات الأساسية ====
 DEFAULT_WELCOME_CHANNEL_ID = 1526255263462461530
@@ -69,7 +68,8 @@ def load_config():
         "tax_channel_id": None,
         "buy_category_id": None,
         "support_category_id": None,
-        "payment_methods": DEFAULT_PAYMENT_METHODS
+        "payment_methods": DEFAULT_PAYMENT_METHODS,
+        "voice_stay_channel_id": None
     }
 
 
@@ -85,24 +85,6 @@ if "payment_methods" not in config:
     _config_dirty = True
 if _config_dirty:
     save_config(config)
-
-
-def load_invite_log():
-    if os.path.exists(INVITE_LOG_FILE):
-        try:
-            with open(INVITE_LOG_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {}
-
-
-def save_invite_log(data):
-    with open(INVITE_LOG_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-
-invite_log = load_invite_log()   # member_id (str) -> {"inviter_id","inviter_name","invited_at"}
 
 
 def log_cv_usage(ctx: commands.Context, authorized: bool):
@@ -282,6 +264,7 @@ class CustomBot(commands.Bot):
         intents.presences = True
         intents.message_content = True
         intents.invites = True
+        intents.voice_states = True
         super().__init__(command_prefix="+", intents=intents, help_command=None)
 
     async def setup_hook(self):
@@ -327,8 +310,39 @@ async def on_ready():
         except Exception:
             pass
 
+        voice_id = config.get("voice_stay_channel_id")
+        if voice_id and guild.voice_client is None:
+            voice_channel = guild.get_channel(voice_id)
+            if voice_channel:
+                try:
+                    await voice_channel.connect(self_deaf=True, self_mute=True, reconnect=True)
+                except Exception as e:
+                    print(f"⚠️ تعذر الاتصال بروم الفويس الثابت: {e}")
+
     if not check_inactive_tickets.is_running():
         check_inactive_tickets.start()
+
+
+# ---------- 🔊 نظام البقاء الدائم في الفويس (Voice Stay) ----------
+@bot.event
+async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
+    if member.id != bot.user.id:
+        return
+
+    guild = member.guild
+    voice_id = config.get("voice_stay_channel_id")
+    if not voice_id:
+        return
+
+    # لو البوت طاح من الفويس (طرد/قطع اتصال) وما كان بنية النقل، يحاول يرجع تلقائياً
+    if after.channel is None:
+        await asyncio.sleep(3)
+        target_channel = guild.get_channel(voice_id)
+        if target_channel:
+            try:
+                await target_channel.connect(self_deaf=True, self_mute=True, reconnect=True)
+            except Exception as e:
+                print(f"⚠️ فشل إعادة الاتصال بروم الفويس الثابت: {e}")
 
 
 # ---------- نظام الترحيب (مع تتبع الداعي) ----------
@@ -349,14 +363,6 @@ async def on_member_join(member: discord.Member):
                 break
     except Exception:
         pass
-
-    # تسجيل بيانات الدعوة بشكل دائم عشان أوامر +winv و +invites
-    invite_log[str(member.id)] = {
-        "inviter_id": inviter.id if inviter else None,
-        "inviter_name": str(inviter) if inviter else None,
-        "invited_at": discord.utils.utcnow().isoformat()
-    }
-    save_invite_log(invite_log)
 
     channel_id = config.get("welcome_channel_id", DEFAULT_WELCOME_CHANNEL_ID)
     channel = guild.get_channel(channel_id)
@@ -477,9 +483,12 @@ async def claim_cmd(ctx: commands.Context):
     except Exception: pass
 
     embed = discord.Embed(
-        description=f"✅ **تم استلام التذكرة بواسطة:** {ctx.author.mention}\nسيقوم بمتابعة طلبك الآن.",
+        title="🙋‍♂️ تم استلام التذكرة",
+        description=f"**بواسطة:** {ctx.author.mention}\nسيقوم بمتابعة طلبك الآن.",
         color=discord.Color.green()
     )
+    embed.set_footer(text=f"{ctx.guild.name} • Axion Store", icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
+    embed.timestamp = discord.utils.utcnow()
     await ctx.send(embed=embed)
 
 
@@ -541,60 +550,13 @@ async def check_invites(ctx: commands.Context, member: discord.Member = None):
     except Exception:
         pass
 
-    invited_ids = [
-        mid for mid, data in invite_log.items()
-        if data.get("inviter_id") == target.id
-    ]
-
     embed = discord.Embed(
-        description=f"📊 **عدد دعوات {target.mention}:** `{total_uses}` عضو",
+        title="📊 إحصائية الدعوات",
+        description=f"**العضو:** {target.mention}\n**عدد الدعوات:** `{total_uses}` عضو",
         color=EMBED_COLOR
     )
-
-    if invited_ids:
-        mentions_list = "\n".join(f"<@{mid}>" for mid in invited_ids[:25])
-        if len(invited_ids) > 25:
-            mentions_list += f"\n... و`{len(invited_ids) - 25}` عضو آخر"
-        embed.add_field(
-            name=f"👥 الأعضاء الذين دخلوا عن طريقه ({len(invited_ids)})",
-            value=mentions_list,
-            inline=False
-        )
-    else:
-        embed.add_field(name="👥 الأعضاء الذين دخلوا عن طريقه", value="لا يوجد", inline=False)
-
-    await ctx.reply(embed=embed, mention_author=False)
-
-
-# ---------- 🔎 مين دعا هذا الشخص (+winv) ----------
-@bot.command(name="winv")
-async def who_invited(ctx: commands.Context, *, target: str):
-    target = target.strip()
-    match = re.match(r"^<@!?(\d+)>$", target)
-    if match:
-        target_id = int(match.group(1))
-    else:
-        try:
-            target_id = int(target)
-        except ValueError:
-            await ctx.reply("⚠️ **الرجاء إدخال منشن صحيح أو آيدي حساب.**", mention_author=False)
-            return
-
-    entry = invite_log.get(str(target_id))
-    if not entry or not entry.get("inviter_id"):
-        await ctx.reply(f"⚠️ **لا توجد بيانات دعوة مسجلة لهذا العضو (`{target_id}`).**", mention_author=False)
-        return
-
-    inviter_id = entry["inviter_id"]
-    inviter_name = entry.get("inviter_name") or "غير معروف"
-
-    embed = discord.Embed(
-        description=(
-            f"👤 **العضو:** <@{target_id}> (`{target_id}`)\n"
-            f"📩 **دخل عن طريق:** {inviter_name} (<@{inviter_id}>)"
-        ),
-        color=EMBED_COLOR
-    )
+    embed.set_thumbnail(url=target.display_avatar.url)
+    embed.set_footer(text=f"{ctx.guild.name} • Invites System", icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
     await ctx.reply(embed=embed, mention_author=False)
 
 
@@ -709,6 +671,20 @@ async def sal_command(ctx: commands.Context):
         results.append(f"✅ **قناة حساب الضريبة →** {tax_ch.mention}")
     else:
         results.append("❌ **لم يتم العثور على قناة الضريبة (تأكد من الآيدي).**")
+
+    voice_ch = ctx.guild.get_channel(1531293262944534619)
+    if voice_ch and isinstance(voice_ch, discord.VoiceChannel):
+        config["voice_stay_channel_id"] = voice_ch.id
+        results.append(f"✅ **روم الفويس الثابت →** `{voice_ch.name}`")
+        try:
+            if ctx.guild.voice_client:
+                await ctx.guild.voice_client.move_to(voice_ch)
+            else:
+                await voice_ch.connect(self_deaf=True, self_mute=True, reconnect=True)
+        except Exception:
+            pass
+    else:
+        results.append("❌ **لم يتم العثور على روم الفويس الثابت (تأكد من الآيدي).**")
 
     save_config(config)
 
@@ -892,12 +868,12 @@ async def help_command(ctx: commands.Context):
             "`+lock` / `+unlock` • قفل أو فتح القناة\n"
             "`+cus <@العضو>` • منح رتبة العميل فوراً\n"
             "`+come <@العضو>` • استدعاء عضو إلى القناة\n"
+            "`+join <ID>` • تثبيت البوت في روم فويس معيّن باستمرار\n"
             "`+font <النص>` • زخرفة النصوص بشكل احترافي\n"
             "`+say <الرسالة>` • إرسال نص باسم البوت\n"
             "`+say-embed <الرسالة>` • إرسال إيمبد منسق\n"
             "`+say-photo <الرسالة>` • إرسال صورة مرفقة مع نص باسم البوت\n"
-            "`+invites [@عضو]` • عرض عدد دعوات عضو والأعضاء اللي دخلوا عن طريقه\n"
-            "`+winv <منشن/آيدي>` • معرفة مين دعا عضو معين"
+            "`+invites [@عضو]` • عرض عدد دعوات عضو"
         ),
         inline=False
     )
@@ -955,6 +931,34 @@ async def tax_setup(ctx: commands.Context, room_id: int = None):
 async def ping(ctx: commands.Context):
     latency = round(bot.latency * 1000)
     await ctx.reply(f"⚡ **سرعة الاستجابة:** `{latency}ms`", mention_author=False)
+
+
+# ---------- 🔊 +join <voice_room_id> ----------
+@bot.command(name="join")
+async def join_voice(ctx: commands.Context, room_id: int):
+    channel = ctx.guild.get_channel(room_id)
+    if channel is None or not isinstance(channel, discord.VoiceChannel):
+        await ctx.reply("❌ **لم يتم العثور على روم فويس بهذا الآيدي.**", mention_author=False)
+        return
+
+    config["voice_stay_channel_id"] = channel.id
+    save_config(config)
+
+    try:
+        if ctx.guild.voice_client:
+            await ctx.guild.voice_client.move_to(channel)
+        else:
+            await channel.connect(self_deaf=True, self_mute=True, reconnect=True)
+    except Exception as e:
+        await ctx.reply(f"❌ **تعذر الاتصال بالروم:** {e}", mention_author=False)
+        return
+
+    embed = discord.Embed(
+        description=f"🔊 **تم الاتصال بروم** {channel.mention} **وسيبقى البوت متصلاً به باستمرار.**",
+        color=EMBED_COLOR
+    )
+    embed.set_footer(text=f"{ctx.guild.name} • Voice Stay", icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
+    await ctx.reply(embed=embed, mention_author=False)
 
 
 # ---------- +serverinfo ----------
