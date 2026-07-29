@@ -264,11 +264,11 @@ class TicketSetupView(discord.ui.View):
             except Exception:
                 pass
 
-    @discord.ui.button(label="شراء منتج", emoji="🛒", style=discord.ButtonStyle.success, custom_id="persistent_buy_ticket")
+    @discord.ui.button(label="شراء منتج", emoji="<:emoji_8:1530402891339272304>", style=discord.ButtonStyle.success, custom_id="persistent_buy_ticket")
     async def buy_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._create_ticket_channel(interaction, "buy", "🛒 تذكرة شراء منتج - Axion Store", BUY_ROLE_ID, "buy_category_id")
 
-    @discord.ui.button(label="الدعم الفنى", emoji="🛠️", style=discord.ButtonStyle.primary, custom_id="persistent_support_ticket")
+    @discord.ui.button(label="الدعم الفنى", emoji="<:emoji_19:1530402823169245184>", style=discord.ButtonStyle.primary, custom_id="persistent_support_ticket")
     async def support_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._create_ticket_channel(interaction, "support", "🛠️ تذكرة الدعم الفني - Axion Store", SUPPORT_ROLE_ID, "support_category_id")
 
