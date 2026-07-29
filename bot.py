@@ -59,47 +59,47 @@ TICKET_CATEGORIES = [
     {
         "key": "inquiry", "label": "استفسار على منتج",
         "emoji": "<:Support:1532171575653302397>", "prefix": "INQUIRY", "needs_username": False,
-        "desc": "لو حاب تستفسر عن اي شيء يخص المتجر او يخص منتج يمكنك الضغط على زر إستفسار على منتج",
+        "desc": "لو تبي تستفسر عن اي شيء يخص المتجر او يخص منتج يمكنك الضغط على زر إستفسار على منتج",
     },
     {
         "key": "fivem", "label": "Fivem",
         "emoji": "<:FIVEM:1530421877443530863>", "prefix": "FIVEM", "needs_username": False,
-        "desc": "لو حاب تشتري حساب فايف ام او اي شيء ليه علاقة به اضغط علي",
+        "desc": "لو تبي تشتري حساب فايف ام او اي شيء ليه علاقة به اضغط علي",
     },
     {
         "key": "discord", "label": "Discord",
         "emoji": "<a:AT_Discord:1532164241270902854>", "prefix": "DISCORD", "needs_username": False,
-        "desc": "لو حاب تشتري اي شيء يتعلق بالديسكورد من نيترو، بوستات، افكتات، او هايب سكواد اضغط علي",
+        "desc": "لو تبي تشتري اي شيء يتعلق بالديسكورد من نيترو، بوستات، افكتات، او هايب سكواد اضغط علي",
     },
     {
         "key": "robux", "label": "Robux",
         "emoji": "<:Robux:1530419657209548841>", "prefix": "ROBUX", "needs_username": True,
-        "desc": "لو حاب تشتري او تستفسر عن اي شيء يخص حساب او منتجات روبوكس اضغط علي",
+        "desc": "لو تبي تشتري او تستفسر عن اي شيء يخص حساب او منتجات روبوكس اضغط علي",
     },
     {
         "key": "credit", "label": "Credit",
         "emoji": "<:Pro:1530379178635952200>", "prefix": "CREDIT", "needs_username": False,
-        "desc": "لو حاب تشتري كريدت او رصيد اضغط علي",
+        "desc": "لو تبي تشتري كريدت او رصيد اضغط علي",
     },
     {
         "key": "hosting", "label": "Hosting",
         "emoji": "<:OX_HOST:1532158984734375986>", "prefix": "HOST", "needs_username": False,
-        "desc": "لو حاب تشتري استضافة او تستفسر عنها اضغط علي",
+        "desc": "لو تبي تشتري استضافة او تستفسر عنها اضغط علي",
     },
     {
         "key": "snapchat", "label": "Snapchat",
         "emoji": "<:5378_snapchat:1532159134382686288>", "prefix": "SNAP", "needs_username": False,
-        "desc": "لو حاب تشتري حساب سناب شات او اي شيء يخصه اضغط علي",
+        "desc": "لو تبي تشتري حساب سناب شات او اي شيء يخصه اضغط علي",
     },
     {
         "key": "dev", "label": "Dev",
         "emoji": "<:dev:1530379905148260542>", "prefix": "DEV", "needs_username": False,
-        "desc": "لو حاب تطلب خدمة برمجة او بوت مخصص اضغط علي",
+        "desc": "لو تبي تطلب خدمة برمجة او بوت مخصص اضغط علي",
     },
     {
         "key": "windows", "label": "Windows",
         "emoji": "<:windows10100:1532163510753165443>", "prefix": "WINDOWS", "needs_username": False,
-        "desc": "لو حاب تفعل نسخة ويندوز اضغط علي",
+        "desc": "لو تبي تفعل نسخة ويندوز اضغط علي",
     },
 ]
 TICKET_PREFIXES = tuple(f"{c['prefix'].lower()}-" for c in TICKET_CATEGORIES)
@@ -339,9 +339,9 @@ async def create_service_ticket(interaction: discord.Interaction, category: dict
         await interaction.response.send_message(embed=success_embed, ephemeral=True)
 
     description = (
-        f"أهلاً بك {member.mention} في **𝐀𝐱𝐢𝐨𝐧 𝐒𝐭𝐨𝐫𝐞** 👋\n\n"
-        f"📝 يرجى كتابة تفاصيل طلبك بوضوح وسيقوم الطاقم بالرد عليك فوراً.\n"
-        f"⏱️ **مدة التسليم المتوقعة:** من **دقيقة واحدة** إلى **48 ساعة** كحد أقصى."
+        f"**أهلاً بك {member.mention} في 𝐀𝐱𝐢𝐨𝐧 𝐒𝐭𝐨𝐫𝐞 👋**\n\n"
+        f"**📝 يرجى كتابة تفاصيل طلبك بوضوح وسيقوم الطاقم بالرد عليك فوراً.**\n"
+        f"**⏱️ مدة التسليم المتوقعة: من دقيقة واحدة إلى 48 ساعة كحد أقصى.**"
     )
     if extra_info:
         description += f"\n\n{extra_info}"
@@ -435,6 +435,41 @@ class TicketSetupView(discord.ui.View):
             self.add_item(ServiceTicketButton(category, row=index // 2))
 
 
+class ServiceTicketSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(
+                label=category["label"],
+                value=category["key"],
+                emoji=category["emoji"],
+                description=category["desc"][:100]
+            )
+            for category in TICKET_CATEGORIES
+        ]
+        super().__init__(
+            placeholder="اختر نوع طلبك من هنا...",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="ticket_select_menu"
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        category = TICKET_CATEGORY_BY_KEY.get(self.values[0])
+        if not category:
+            return
+        if category.get("needs_username"):
+            await interaction.response.send_modal(RobuxUsernameModal(category))
+        else:
+            await create_service_ticket(interaction, category)
+
+
+class TicketSelectView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(ServiceTicketSelect())
+
+
 # =========================================================
 # ===================== البوت الرئيسي =====================
 # =========================================================
@@ -450,6 +485,7 @@ class CustomBot(commands.Bot):
 
     async def setup_hook(self):
         self.add_view(TicketSetupView())
+        self.add_view(TicketSelectView())
         self.add_view(TicketControlView())
 
 bot = CustomBot()
@@ -962,7 +998,8 @@ async def help_command(ctx: commands.Context):
     embed.add_field(
         name="🛍️ إعدادات المتجر والتذاكر",
         value=(
-            "`+panel` • إرسال لوحة فتح التذاكر (كل الأقسام)\n"
+            "`+panel` • إرسال لوحة فتح التذاكر (أزرار)\n"
+            "`+dpanel` • إرسال لوحة فتح التذاكر (قائمة اختيار Dropdown)\n"
             "`+claim` • استلام التذكرة الحالية\n"
             "`+close` • إغلاق التذكرة الحالية\n"
             "`+kl` • تحذير بالإغلاق التلقائي\n"
@@ -1182,14 +1219,14 @@ async def panel_command(ctx: commands.Context):
         pass
 
     categories_lines = "\n\n".join(
-        f"{cat['desc']} {cat['emoji']}" for cat in TICKET_CATEGORIES
+        f"**{cat['desc']}** {cat['emoji']}" for cat in TICKET_CATEGORIES
     )
 
     embed = discord.Embed(
         title="🎫 مركز الطلبات والاستفسارات - 𝐀𝐱𝐢𝐨𝐧 𝐒𝐭𝐨𝐫𝐞",
         description=(
             f"{categories_lines}\n\n"
-            "⚠️ *ملاحظة: يحق لك فتح تذكرة واحدة فقط في نفس الوقت.*"
+            "**⚠️ ملاحظة: يحق لك فتح تذكرة واحدة فقط في نفس الوقت.**"
         ),
         color=TICKET_EMBED_COLOR
     )
@@ -1198,6 +1235,33 @@ async def panel_command(ctx: commands.Context):
     embed.set_footer(text="Axion Store • DEV BY : @D0JW")
 
     await ctx.send(embed=embed, view=TicketSetupView())
+
+
+@bot.command(name="dpanel")
+async def dpanel_command(ctx: commands.Context):
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+
+    categories_lines = "\n\n".join(
+        f"**{cat['desc']}** {cat['emoji']}" for cat in TICKET_CATEGORIES
+    )
+
+    embed = discord.Embed(
+        title="🎫 مركز الطلبات والاستفسارات - 𝐀𝐱𝐢𝐨𝐧 𝐒𝐭𝐨𝐫𝐞",
+        description=(
+            f"{categories_lines}\n\n"
+            "**📥 اختر نوع طلبك من القائمة أدناه وسيتم فتح تذكرة خاصة بك فوراً.**\n"
+            "**⚠️ ملاحظة: يحق لك فتح تذكرة واحدة فقط في نفس الوقت.**"
+        ),
+        color=TICKET_EMBED_COLOR
+    )
+    if ctx.guild.icon:
+        embed.set_thumbnail(url=ctx.guild.icon.url)
+    embed.set_footer(text="Axion Store • DEV BY : @D0JW")
+
+    await ctx.send(embed=embed, view=TicketSelectView())
 
 
 # =========================================================
