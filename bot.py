@@ -15,6 +15,7 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN") or os.getenv("BOT_TOKEN")
 CONFIG_FILE = "config.json"
 CV_LOG_FILE = "cv_log.txt"
+INVITE_LOG_FILE = "invite_log.json"
 
 # ==== الإعدادات الأساسية ====
 DEFAULT_WELCOME_CHANNEL_ID = 1526255263462461530
@@ -84,6 +85,24 @@ if "payment_methods" not in config:
     _config_dirty = True
 if _config_dirty:
     save_config(config)
+
+
+def load_invite_log():
+    if os.path.exists(INVITE_LOG_FILE):
+        try:
+            with open(INVITE_LOG_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def save_invite_log(data):
+    with open(INVITE_LOG_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+invite_log = load_invite_log()   # member_id (str) -> {"inviter_id","inviter_name","invited_at"}
 
 
 def log_cv_usage(ctx: commands.Context, authorized: bool):
@@ -331,12 +350,20 @@ async def on_member_join(member: discord.Member):
     except Exception:
         pass
 
+    # تسجيل بيانات الدعوة بشكل دائم عشان أوامر +winv و +invites
+    invite_log[str(member.id)] = {
+        "inviter_id": inviter.id if inviter else None,
+        "inviter_name": str(inviter) if inviter else None,
+        "invited_at": discord.utils.utcnow().isoformat()
+    }
+    save_invite_log(invite_log)
+
     channel_id = config.get("welcome_channel_id", DEFAULT_WELCOME_CHANNEL_ID)
     channel = guild.get_channel(channel_id)
     if channel is None:
         return
 
-    inv_text = f"\n📩 **تم الدعوة بواسطة:** {inviter.mention}" if inviter else ""
+    inv_text = f"\n📩 **تم الدعوة بواسطة:** {inviter.mention}" if inviter else "\n📩 **تم الدعوة بواسطة:** غير معروف"
     embed = discord.Embed(
         title="✨ أهلاً بك في 𝐀𝐱𝐢𝐨𝐧 𝐒𝐭𝐨𝐫𝐞 ✨",
         description=f"مرحباً بك {member.mention} في **{guild.name}** 🌸{inv_text}",
@@ -514,8 +541,58 @@ async def check_invites(ctx: commands.Context, member: discord.Member = None):
     except Exception:
         pass
 
+    invited_ids = [
+        mid for mid, data in invite_log.items()
+        if data.get("inviter_id") == target.id
+    ]
+
     embed = discord.Embed(
         description=f"📊 **عدد دعوات {target.mention}:** `{total_uses}` عضو",
+        color=EMBED_COLOR
+    )
+
+    if invited_ids:
+        mentions_list = "\n".join(f"<@{mid}>" for mid in invited_ids[:25])
+        if len(invited_ids) > 25:
+            mentions_list += f"\n... و`{len(invited_ids) - 25}` عضو آخر"
+        embed.add_field(
+            name=f"👥 الأعضاء الذين دخلوا عن طريقه ({len(invited_ids)})",
+            value=mentions_list,
+            inline=False
+        )
+    else:
+        embed.add_field(name="👥 الأعضاء الذين دخلوا عن طريقه", value="لا يوجد", inline=False)
+
+    await ctx.reply(embed=embed, mention_author=False)
+
+
+# ---------- 🔎 مين دعا هذا الشخص (+winv) ----------
+@bot.command(name="winv")
+async def who_invited(ctx: commands.Context, *, target: str):
+    target = target.strip()
+    match = re.match(r"^<@!?(\d+)>$", target)
+    if match:
+        target_id = int(match.group(1))
+    else:
+        try:
+            target_id = int(target)
+        except ValueError:
+            await ctx.reply("⚠️ **الرجاء إدخال منشن صحيح أو آيدي حساب.**", mention_author=False)
+            return
+
+    entry = invite_log.get(str(target_id))
+    if not entry or not entry.get("inviter_id"):
+        await ctx.reply(f"⚠️ **لا توجد بيانات دعوة مسجلة لهذا العضو (`{target_id}`).**", mention_author=False)
+        return
+
+    inviter_id = entry["inviter_id"]
+    inviter_name = entry.get("inviter_name") or "غير معروف"
+
+    embed = discord.Embed(
+        description=(
+            f"👤 **العضو:** <@{target_id}> (`{target_id}`)\n"
+            f"📩 **دخل عن طريق:** {inviter_name} (<@{inviter_id}>)"
+        ),
         color=EMBED_COLOR
     )
     await ctx.reply(embed=embed, mention_author=False)
@@ -819,7 +896,8 @@ async def help_command(ctx: commands.Context):
             "`+say <الرسالة>` • إرسال نص باسم البوت\n"
             "`+say-embed <الرسالة>` • إرسال إيمبد منسق\n"
             "`+say-photo <الرسالة>` • إرسال صورة مرفقة مع نص باسم البوت\n"
-            "`+invites [@عضو]` • عرض عدد دعوات عضو"
+            "`+invites [@عضو]` • عرض عدد دعوات عضو والأعضاء اللي دخلوا عن طريقه\n"
+            "`+winv <منشن/آيدي>` • معرفة مين دعا عضو معين"
         ),
         inline=False
     )
