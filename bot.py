@@ -1868,8 +1868,15 @@ class LuckyBoxView(discord.ui.View):
         button.disabled = True
         button.label = "تم الفتح ✅"
 
+        # نعطّل الزر على الرسالة الأصلية فقط، والنتيجة نرسلها كرسالة جديدة
+        # ظاهرة للجميع في القناة/التذكرة (وليست خاصة بالضاغط فقط).
+        await interaction.response.edit_message(view=self)
+
         result_embed = build_luckybox_result_embed(interaction.guild, self.gifter, self.recipient, prize)
-        await interaction.response.edit_message(embed=result_embed, view=self)
+        try:
+            await interaction.channel.send(content=self.recipient.mention, embed=result_embed)
+        except Exception as e:
+            print(f"⚠️ تعذر إرسال نتيجة صندوق الحظ في القناة: {e}")
 
 
 @bot.command(name="luckybox")
