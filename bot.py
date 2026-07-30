@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN") or os.getenv("BOT_TOKEN")
+SOLD_WEBHOOK_URL = os.getenv("SOLD_WEBHOOK_URL", "")
 CONFIG_FILE = "config.json"
 SALES_COUNTER_FILE = "sales_counter.json"
 
@@ -31,8 +32,6 @@ TICKET_LOG_CHANNEL_ID = 1532468240985362682
 STAR_EMOJI = "⭐"
 EMBED_COLOR = discord.Color.from_rgb(47, 49, 54)
 TICKET_EMBED_COLOR = discord.Color.blue()
-
-SOLD_WEBHOOK_URL = "https://discord.com/api/webhooks/1532055087625666780/9PFSY6jSK34UmGPDG3GjSZXxJIevTfLYEJ67WJAHT1qygnZYMKsEhcLmIGrD8i1wL-El"
 
 DEFAULT_PAYMENT_METHODS = {
     "مدار": "لايوجد",
@@ -118,13 +117,59 @@ def is_ticket_channel(channel) -> bool:
     return bool(channel and getattr(channel, "name", "").startswith(TICKET_PREFIXES))
 
 
-def load_config():
-    if os.path.exists(CONFIG_FILE):
+# =========================================================
+# ============= تخزين آمن (بدون فقدان بيانات) =============
+# =========================================================
+# نستخدم كتابة ذرية (temp file + os.replace) بالإضافة إلى نسخة احتياطية .bak
+# حتى لو انقطع البوت أو تم إيقافه بالقوة أثناء الكتابة، لن يتلف الملف الأصلي
+# ولن تُفقد آخر نسخة سليمة من البيانات.
+
+def _atomic_write_json(path: str, data: dict):
+    tmp_path = f"{path}.tmp"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)  # عملية ذرية على مستوى نظام الملفات
+    except Exception as e:
+        print(f"❌ خطأ أثناء الكتابة الآمنة إلى {path}: {e}")
         try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
         except Exception:
             pass
+        return
+
+    # نسخة احتياطية إضافية (لا توقف البرنامج إذا فشلت)
+    try:
+        with open(f"{path}.bak", "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _load_json_with_backup(path: str):
+    """يحاول تحميل الملف الأساسي، وإن كان تالفاً/مفقوداً يلجأ للنسخة الاحتياطية."""
+    for candidate, is_backup in ((path, False), (f"{path}.bak", True)):
+        if not os.path.exists(candidate):
+            continue
+        try:
+            with open(candidate, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if is_backup:
+                print(f"⚠️ الملف الأساسي {path} تالف أو مفقود، تم الاسترجاع من النسخة الاحتياطية.")
+            return data
+        except Exception as e:
+            print(f"⚠️ تعذر قراءة {candidate}: {e}")
+            continue
+    return None
+
+
+def load_config():
+    data = _load_json_with_backup(CONFIG_FILE)
+    if data is not None:
+        return data
     return {
         "welcome_channel_id": DEFAULT_WELCOME_CHANNEL_ID,
         "reviews_channel_id": DEFAULT_REVIEWS_CHANNEL_ID,
@@ -138,12 +183,12 @@ def load_config():
         "ticket_counters": {},
         "invite_uses_snapshot": {},
         "fake_invite_min_days": 5,
+        "away_notified_channels": [],
     }
 
 
 def save_config(data):
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    _atomic_write_json(CONFIG_FILE, data)
 
 
 config = load_config()
@@ -184,7 +229,18 @@ if "invite_uses_snapshot" not in config:
 if "fake_invite_min_days" not in config:
     config["fake_invite_min_days"] = 5
     _config_dirty = True
+if "away_notified_channels" not in config:
+    config["away_notified_channels"] = []
+    _config_dirty = True
 if _config_dirty:
+    save_config(config)
+
+# نستعيد قنوات "الغياب" التي تم إشعارها قبل آخر إعادة تشغيل حتى لا يتكرر الإشعار
+away_notified_channels = set(config.get("away_notified_channels", []))
+
+
+def _persist_away_notified():
+    config["away_notified_channels"] = list(away_notified_channels)
     save_config(config)
 
 
@@ -196,18 +252,17 @@ def get_next_ticket_number(prefix: str) -> int:
 
 
 def load_sales_counter():
-    if os.path.exists(SALES_COUNTER_FILE):
+    data = _load_json_with_backup(SALES_COUNTER_FILE)
+    if data is not None:
         try:
-            with open(SALES_COUNTER_FILE, "r", encoding="utf-8") as f:
-                return int(json.load(f).get("count", 0))
+            return int(data.get("count", 0))
         except Exception:
-            pass
+            return 0
     return 0
 
 
 def save_sales_counter(count: int):
-    with open(SALES_COUNTER_FILE, "w", encoding="utf-8") as f:
-        json.dump({"count": count}, f, ensure_ascii=False, indent=2)
+    _atomic_write_json(SALES_COUNTER_FILE, {"count": count})
 
 
 sales_counter = load_sales_counter()
@@ -386,6 +441,37 @@ async def log_ticket_transcript(channel: discord.TextChannel, closed_by: discord
         print(f"خطأ أثناء إرسال ترانسكريبت التذكرة: {e}")
 
 
+async def close_and_delete_ticket(channel: discord.TextChannel, closer: discord.abc.User):
+    """منطق إغلاق وحذف التذكرة المشترك بين زر التحكم وأمر +close."""
+    embed = discord.Embed(
+        description="🔒 **تم إغلاق التذكرة، سيتم حذف القناة تلقائياً خلال 5 ثوانٍ...**",
+        color=discord.Color.red()
+    )
+    try:
+        await channel.send(embed=embed)
+    except Exception:
+        pass
+
+    for target, overwrite in list(channel.overwrites.items()):
+        if isinstance(target, discord.Member) and not target.bot:
+            overwrite.send_messages = False
+            try:
+                await channel.set_permissions(target, overwrite=overwrite)
+            except Exception:
+                pass
+
+    await log_ticket_transcript(channel, closer)
+
+    away_notified_channels.discard(channel.id)
+    _persist_away_notified()
+
+    await asyncio.sleep(5)
+    try:
+        await channel.delete()
+    except Exception:
+        pass
+
+
 # =========================================================
 # ==================== كلاسات التذاكر ====================
 # =========================================================
@@ -400,28 +486,7 @@ class TicketControlView(discord.ui.View):
         closer = interaction.user
 
         async def do_close(confirm_interaction: discord.Interaction):
-            embed = discord.Embed(
-                description="🔒 **تم إغلاق التذكرة، سيتم حذف القناة تلقائياً خلال 5 ثوانٍ...**",
-                color=discord.Color.red()
-            )
-            await channel.send(embed=embed)
-
-            for target, overwrite in channel.overwrites.items():
-                if isinstance(target, discord.Member) and not target.bot:
-                    overwrite.send_messages = False
-                    try:
-                        await channel.set_permissions(target, overwrite=overwrite)
-                    except Exception:
-                        pass
-
-            await log_ticket_transcript(channel, closer)
-
-            away_notified_channels.discard(channel.id)
-            await asyncio.sleep(5)
-            try:
-                await channel.delete()
-            except Exception:
-                pass
+            await close_and_delete_ticket(channel, closer)
 
         embed = discord.Embed(
             title="⚠️ تأكيد الإغلاق",
@@ -484,11 +549,22 @@ async def create_service_ticket(interaction: discord.Interaction, category: dict
     number = get_next_ticket_number(prefix)
     channel_name = f"{prefix}-{number:04d}"
 
-    ticket_channel = await guild.create_text_channel(
-        name=channel_name,
-        category=ticket_category,
-        overwrites=overwrites
-    )
+    try:
+        ticket_channel = await guild.create_text_channel(
+            name=channel_name,
+            category=ticket_category,
+            overwrites=overwrites
+        )
+    except discord.HTTPException as e:
+        error_embed = discord.Embed(
+            description=f"❌ **تعذر إنشاء التذكرة، حاول مرة أخرى أو تواصل مع الإدارة.**\n`{e}`",
+            color=discord.Color.red()
+        )
+        if interaction.response.is_done():
+            await interaction.followup.send(embed=error_embed, ephemeral=True)
+        else:
+            await interaction.response.send_message(embed=error_embed, ephemeral=True)
+        return
 
     success_embed = discord.Embed(
         description=f"✅ **تم إنشاء تذكرتك بنجاح!**\n📩 {ticket_channel.mention}",
@@ -527,6 +603,7 @@ async def create_service_ticket(interaction: discord.Interaction, category: dict
         )
         await ticket_channel.send(embed=away_embed)
         away_notified_channels.add(ticket_channel.id)
+        _persist_away_notified()
 
     try:
         notify_user = guild.get_member(TICKET_NOTIFY_USER_ID) or await guild.fetch_member(TICKET_NOTIFY_USER_ID)
@@ -808,10 +885,19 @@ async def on_message(message: discord.Message):
             )
             await message.channel.send(embed=away_embed)
             away_notified_channels.add(message.channel.id)
+            _persist_away_notified()
 
         await bot.process_commands(message)
     finally:
         processing_messages.discard(message.id)
+
+
+@bot.event
+async def on_guild_channel_delete(channel):
+    """تنظيف قنوات الغياب المحذوفة من الذاكرة والملف حتى لا تتراكم بلا داعٍ."""
+    if channel.id in away_notified_channels:
+        away_notified_channels.discard(channel.id)
+        _persist_away_notified()
 
 
 # =========================================================
@@ -912,6 +998,7 @@ async def check_invites(ctx: commands.Context, member: discord.Member = None):
     target = member or ctx.author
 
     total_uses = 0
+    invites = []
     try:
         invites = await ctx.guild.invites()
         for inv in invites:
@@ -925,18 +1012,10 @@ async def check_invites(ctx: commands.Context, member: discord.Member = None):
     left_count = 0
     fake_count = 0
     real_count = 0
-    min_days = config.get("fake_invite_min_days", 5)
 
     guild_snapshot = config.get("invite_uses_snapshot", {}).get(str(ctx.guild.id), {})
-    my_invite_codes = set()
-    try:
-        for inv in invites:
-            if inv.inviter and inv.inviter.id == target.id:
-                my_invite_codes.add(inv.code)
-    except Exception:
-        pass
+    my_invite_codes = {inv.code for inv in invites if inv.inviter and inv.inviter.id == target.id}
 
-    now = discord.utils.utcnow()
     for code in my_invite_codes:
         entry = guild_snapshot.get(code)
         if not entry:
@@ -944,10 +1023,6 @@ async def check_invites(ctx: commands.Context, member: discord.Member = None):
         for j in entry.get("joins", []):
             if j.get("left"):
                 left_count += 1
-                try:
-                    joined_at = discord.utils.parse_time(j.get("joined_at")) if hasattr(discord.utils, "parse_time") else None
-                except Exception:
-                    joined_at = None
                 fake_count += 1
             else:
                 real_count += 1
@@ -976,24 +1051,7 @@ async def close_ticket_cmd(ctx: commands.Context):
     closer = ctx.author
 
     async def do_close(confirm_interaction: discord.Interaction):
-        await channel.send(embed=discord.Embed(description="🔒 **تم إغلاق التذكرة. سيتم حذف القناة تلقائياً خلال 5 ثوانٍ...**", color=discord.Color.red()))
-
-        for target, overwrite in channel.overwrites.items():
-            if isinstance(target, discord.Member) and not target.bot:
-                overwrite.send_messages = False
-                try:
-                    await channel.set_permissions(target, overwrite=overwrite)
-                except Exception:
-                    pass
-
-        await log_ticket_transcript(channel, closer)
-
-        away_notified_channels.discard(channel.id)
-        await asyncio.sleep(5)
-        try:
-            await channel.delete()
-        except Exception:
-            pass
+        await close_and_delete_ticket(channel, closer)
 
     await ask_confirmation(
         ctx,
@@ -1092,6 +1150,7 @@ async def away_command(ctx: commands.Context, *, reason: str = None):
         config["away_reason"] = None
         save_config(config)
         away_notified_channels.clear()
+        _persist_away_notified()
         await ctx.send(embed=discord.Embed(description="🟢 **تم إلغاء وضع الغياب، أنت متوفر الآن.**", color=discord.Color.green()))
         return
 
@@ -1099,6 +1158,7 @@ async def away_command(ctx: commands.Context, *, reason: str = None):
     config["away_reason"] = reason.strip() if reason else "غير محدد"
     save_config(config)
     away_notified_channels.clear()
+    _persist_away_notified()
 
     await ctx.send(embed=discord.Embed(description=f"🌙 **تم تفعيل وضع الغياب.**\n📌 **السبب:** {config['away_reason']}\nسيتم إشعار العملاء تلقائياً في التذاكر.", color=discord.Color.orange()))
 
@@ -1267,7 +1327,7 @@ async def help_command(ctx: commands.Context):
     )
     embed.add_field(
         name="🎁 صندوق الحظ",
-        value="`+luckybox` • فتح صندوق حظ عشوائي بجوائز متفاوتة النسب",
+        value="`+luckybox <@العضو>` • إرسال صندوق حظ مخصص لعضو معيّن، يفتحه بنفسه بزر مباشر",
         inline=False
     )
     embed.add_field(
@@ -1594,9 +1654,16 @@ class RateModal(discord.ui.Modal, title="تقييم الخدمة"):
         else:
             await interaction.response.send_message("⚠️ **لم يتم العثور على قناة التقييمات.**", ephemeral=True)
 
+        # نعطّل الزر ونحدّث تسميته على الرسالة الأصلية مباشرة (بدل الاعتماد على
+        # interaction.message الذي قد لا يكون متوفراً في بعض حالات المودال)
         self.rate_view.rate_button.disabled = True
         self.rate_view.rate_button.label = "تم التقييم بنجاح ✅"
-        await interaction.message.edit(view=self.rate_view)
+        target_message = self.rate_view.message or interaction.message
+        if target_message:
+            try:
+                await target_message.edit(view=self.rate_view)
+            except Exception as e:
+                print(f"⚠️ تعذر تحديث زر التقييم بعد الإرسال: {e}")
 
 
 class RateView(discord.ui.View):
@@ -1605,8 +1672,9 @@ class RateView(discord.ui.View):
         self.seller = seller
         self.buyer = buyer
         self.product = product
+        self.message = None  # يُضبط بعد إرسال الرسالة حتى يمكن تعديلها لاحقاً بأمان
 
-    @discord.ui.button(label="اضغط لتقييم الخدمة", style=discord.ButtonStyle.success, emoji="⭐")
+    @discord.ui.button(label="⭐ قيّم تجربتك الآن", style=discord.ButtonStyle.success, emoji="🌟")
     async def rate_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.buyer.id:
             await interaction.response.send_message("❌ **هذا التقييم مخصص للمشتري فقط.**", ephemeral=True)
@@ -1614,15 +1682,46 @@ class RateView(discord.ui.View):
         await interaction.response.send_modal(RateModal(self.seller, self.buyer, self.product, self))
 
 
+def build_rate_request_embed(guild: discord.Guild, buyer: discord.Member, seller: discord.Member, product: str) -> discord.Embed:
+    """رسالة طلب التقييم التي تصل للمشتري (مختلفة عن الرسالة التي تُنشر في روم التقييمات)."""
+    embed = discord.Embed(
+        title="🌟 شاركنا رأيك في تجربتك معنا!",
+        description=(
+            f"أهلاً بك {buyer.mention} 👋\n\n"
+            f"**شكراً لثقتك في 𝐀𝐱𝐢𝐨𝐧 𝐒𝐭𝐨𝐫𝐞!** نتمنى أن تكون تجربتك ممتازة.\n"
+            f"رأيك يهمنا كثيراً ويساعدنا على تقديم خدمة أفضل، خذ لحظة من وقتك للتقييم 🙏"
+        ),
+        color=discord.Color.gold()
+    )
+    embed.add_field(name="🛍️ المنتج", value=f"`{product}`", inline=True)
+    embed.add_field(name="🧑‍💼 تم البيع بواسطة", value=seller.mention, inline=True)
+    embed.add_field(
+        name="📝 كيف أقيّم؟",
+        value="اضغط على الزر بالأسفل ⬇️ واختر عدد النجوم مع كتابة تعليق قصير عن تجربتك.",
+        inline=False
+    )
+    embed.set_thumbnail(url=buyer.display_avatar.url)
+    embed.set_footer(text=f"{guild.name} • Axion Store", icon_url=guild.icon.url if guild.icon else None)
+    embed.timestamp = discord.utils.utcnow()
+    return embed
+
+
+async def send_rate_request(ctx: commands.Context, seller: discord.Member, buyer: discord.Member, product: str):
+    """يبني ويرسل طلب التقييم، ويربط الرسالة بالـ View حتى يعمل تعديل الزر لاحقاً بشكل موثوق."""
+    view = RateView(seller=seller, buyer=buyer, product=product)
+    embed = build_rate_request_embed(ctx.guild, buyer, seller, product)
+    sent_message = await ctx.send(content=buyer.mention, embed=embed, view=view)
+    view.message = sent_message
+    return sent_message
+
+
 @bot.command(name="rate")
 async def rate_prefix(ctx: commands.Context, buyer: discord.Member, *, product: str):
-    view = RateView(seller=ctx.author, buyer=buyer, product=product)
-
-    embed = discord.Embed(
-        description=f"{buyer.mention} 👋 **شكراً لثقتك بنا!**\nنتمنى منك مشاركة رأيك وتقييم الخدمة عبر الزر أدناه.",
-        color=EMBED_COLOR
-    )
-    await ctx.send(embed=embed, view=view)
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+    await send_rate_request(ctx, seller=ctx.author, buyer=buyer, product=product)
 
 
 # =========================================================
@@ -1662,17 +1761,20 @@ async def sold_command(ctx: commands.Context, product: str, buyer: discord.Membe
     embed.timestamp = discord.utils.utcnow()
 
     sent_ok = True
-    try:
-        async with aiohttp.ClientSession() as session:
-            webhook = discord.Webhook.from_url(SOLD_WEBHOOK_URL, session=session)
-            await webhook.send(
-                embed=embed,
-                username="Axion Store | Sales",
-                avatar_url=ctx.guild.icon.url if ctx.guild.icon else None
-            )
-    except Exception as e:
+    if SOLD_WEBHOOK_URL:
+        try:
+            async with aiohttp.ClientSession() as session:
+                webhook = discord.Webhook.from_url(SOLD_WEBHOOK_URL, session=session)
+                await webhook.send(
+                    embed=embed,
+                    username="Axion Store | Sales",
+                    avatar_url=ctx.guild.icon.url if ctx.guild.icon else None
+                )
+        except Exception as e:
+            sent_ok = False
+            print(f"خطأ أثناء إرسال ويبهوك عملية البيع: {e}")
+    else:
         sent_ok = False
-        print(f"خطأ أثناء إرسال ويبهوك عملية البيع: {e}")
 
     if sent_ok:
         await ctx.send(embed=discord.Embed(description=f"✅ **تم تسجيل عملية البيع بنجاح، رقم العملية:** `{order_number}`", color=discord.Color.green()))
@@ -1680,13 +1782,8 @@ async def sold_command(ctx: commands.Context, product: str, buyer: discord.Membe
         await ctx.send(embed=discord.Embed(description=f"⚠️ **تم تسجيل عملية البيع رقم `{order_number}` محلياً، لكن تعذر إرسالها عبر الويبهوك.**", color=discord.Color.orange()))
 
     # إرسال طلب تقييم تلقائي للمشتري مباشرة بعد تسجيل عملية البيع
-    rate_view = RateView(seller=ctx.author, buyer=buyer, product=product)
-    rate_embed = discord.Embed(
-        description=f"{buyer.mention} 👋 **شكراً لثقتك بنا!**\nنتمنى منك مشاركة رأيك وتقييم الخدمة عبر الزر أدناه.",
-        color=EMBED_COLOR
-    )
     try:
-        await ctx.send(embed=rate_embed, view=rate_view)
+        await send_rate_request(ctx, seller=ctx.author, buyer=buyer, product=product)
     except Exception as e:
         print(f"خطأ أثناء إرسال طلب التقييم التلقائي: {e}")
 
@@ -1709,31 +1806,83 @@ def draw_lucky_box_prize() -> dict:
     return random.choices(LUCKY_BOX_PRIZES, weights=weights, k=1)[0]
 
 
+def build_luckybox_intro_embed(guild: discord.Guild, gifter: discord.abc.User, recipient: discord.Member) -> discord.Embed:
+    """الإيمبد الأولي: يعرض معلومات صندوق الحظ ونسب الجوائز قبل الفتح."""
+    odds_lines = "\n".join(f"• **{p['name']}** — `{p['weight']}%`" for p in LUCKY_BOX_PRIZES)
+    embed = discord.Embed(
+        title="🎁 صندوق حظ جديد!",
+        description=(
+            f"{recipient.mention} **وصلك صندوق حظ من {gifter.mention}!**\n"
+            f"اضغط على الزر بالأسفل ⬇️ لفتحه ومعرفة جائزتك."
+        ),
+        color=discord.Color.gold()
+    )
+    embed.add_field(name="🎯 نسب الجوائز", value=odds_lines, inline=False)
+    embed.add_field(name="👤 مخصص لـ", value=recipient.mention, inline=True)
+    embed.add_field(name="🎁 مُهدى من", value=gifter.mention, inline=True)
+    embed.set_thumbnail(url=recipient.display_avatar.url)
+    embed.set_footer(text=f"{guild.name} • Axion Store", icon_url=guild.icon.url if guild.icon else None)
+    embed.timestamp = discord.utils.utcnow()
+    return embed
+
+
+def build_luckybox_result_embed(guild: discord.Guild, gifter: discord.abc.User, recipient: discord.Member, prize: dict) -> discord.Embed:
+    """الإيمبد بعد الفتح: يعرض الجائزة الفائزة فقط."""
+    odds_lines = "\n".join(f"• **{p['name']}** — `{p['weight']}%`" for p in LUCKY_BOX_PRIZES)
+    embed = discord.Embed(
+        title="🎉 تم فتح صندوق الحظ!",
+        description=(
+            f"{recipient.mention} **فتح الصندوق وحصل على:**\n\n"
+            f"🏆 **{prize['name']}**"
+        ),
+        color=discord.Color.gold()
+    )
+    embed.add_field(name="🎯 نسب الجوائز", value=odds_lines, inline=False)
+    embed.add_field(name="🎁 مُهدى من", value=gifter.mention, inline=True)
+    embed.set_thumbnail(url=recipient.display_avatar.url)
+    embed.set_footer(text=f"{guild.name} • Axion Store", icon_url=guild.icon.url if guild.icon else None)
+    embed.timestamp = discord.utils.utcnow()
+    return embed
+
+
+class LuckyBoxView(discord.ui.View):
+    def __init__(self, gifter: discord.abc.User, recipient: discord.Member):
+        super().__init__(timeout=None)
+        self.gifter = gifter
+        self.recipient = recipient
+        self.opened = False
+
+    @discord.ui.button(label="افتح الصندوق", emoji="🎁", style=discord.ButtonStyle.success, custom_id="open_luckybox_btn")
+    async def open_box(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.recipient.id:
+            await interaction.response.send_message("❌ **هذا الصندوق ليس مخصصاً لك.**", ephemeral=True)
+            return
+
+        if self.opened:
+            await interaction.response.send_message("⚠️ **تم فتح هذا الصندوق بالفعل.**", ephemeral=True)
+            return
+        self.opened = True
+
+        prize = draw_lucky_box_prize()
+
+        button.disabled = True
+        button.label = "تم الفتح ✅"
+
+        result_embed = build_luckybox_result_embed(interaction.guild, self.gifter, self.recipient, prize)
+        await interaction.response.edit_message(embed=result_embed, view=self)
+
+
 @bot.command(name="luckybox")
-async def luckybox_command(ctx: commands.Context):
+async def luckybox_command(ctx: commands.Context, recipient: discord.Member):
+    """الاستخدام: +luckybox <@العضو المخصص له الصندوق>"""
     try:
         await ctx.message.delete()
     except Exception:
         pass
 
-    prize = draw_lucky_box_prize()
-
-    odds_lines = "\n".join(f"• **{p['name']}** — `{p['weight']}%`" for p in LUCKY_BOX_PRIZES)
-
-    embed = discord.Embed(
-        title="🎁 صندوق الحظ - Lucky Box",
-        description=(
-            f"{ctx.author.mention} **قام بفتح صندوق الحظ...**\n\n"
-            f"🏆 **الجائزة:** `{prize['name']}`\n\n"
-            f"**نسب الجوائز:**\n{odds_lines}"
-        ),
-        color=discord.Color.gold()
-    )
-    embed.set_thumbnail(url=ctx.author.display_avatar.url)
-    embed.set_footer(text=f"{ctx.guild.name} • Axion Store", icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
-    embed.timestamp = discord.utils.utcnow()
-
-    await ctx.send(embed=embed)
+    embed = build_luckybox_intro_embed(ctx.guild, ctx.author, recipient)
+    view = LuckyBoxView(gifter=ctx.author, recipient=recipient)
+    await ctx.send(content=recipient.mention, embed=embed, view=view)
 
 
 # =========================================================
