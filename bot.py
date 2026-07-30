@@ -3,6 +3,7 @@ import re
 import io
 import json
 import math
+import random
 import asyncio
 import aiohttp
 import discord
@@ -51,9 +52,6 @@ AXION_TERMS = (
 # =========================================================
 # ============= أقسام التذاكر (لوحة الطلبات) =============
 # =========================================================
-# كل قسم = زر مستقل في اللوحة. الحقل "prefix" يُستخدم في اسم
-# قناة التذكرة (مثال: fivem-0001) وفي عدّاد التذاكر الخاص به.
-# الحقل "desc" هو سطر الشرح الذي يظهر في الإيمبد فوق زر هذا القسم مباشرة.
 TICKET_CATEGORIES = [
     {
         "key": "inquiry", "label": "استفسار على منتج",
@@ -138,6 +136,8 @@ def load_config():
         "away_mode": False,
         "away_reason": None,
         "ticket_counters": {},
+        "invite_uses_snapshot": {},
+        "fake_invite_min_days": 5,
     }
 
 
@@ -177,6 +177,12 @@ if not config.get("reviews_channel_id"):
     _config_dirty = True
 if "ticket_counters" not in config:
     config["ticket_counters"] = {}
+    _config_dirty = True
+if "invite_uses_snapshot" not in config:
+    config["invite_uses_snapshot"] = {}
+    _config_dirty = True
+if "fake_invite_min_days" not in config:
+    config["fake_invite_min_days"] = 5
     _config_dirty = True
 if _config_dirty:
     save_config(config)
@@ -231,10 +237,6 @@ def parse_amount(text: str):
 # =========================================================
 
 class ConfirmView(discord.ui.View):
-    """
-    زر تأكيد عام يُستخدم قبل أي عملية حساسة (حذف/برودكاست جماعي/إغلاق تذكرة).
-    on_confirm: دالة async تُستدعى عند الضغط على "تأكيد".
-    """
     def __init__(self, author_id: int, on_confirm, timeout: int = 30):
         super().__init__(timeout=timeout)
         self.author_id = author_id
@@ -277,7 +279,6 @@ class ConfirmView(discord.ui.View):
 
 
 async def ask_confirmation(ctx_or_interaction, description: str, on_confirm, author_id: int):
-    """يرسل رسالة تأكيد داخل نفس القناة (embed + أزرار تأكيد/إلغاء)."""
     embed = discord.Embed(
         title="⚠️ تأكيد مطلوب",
         description=description,
@@ -312,6 +313,50 @@ async def generate_ticket_transcript(channel: discord.TextChannel) -> discord.Fi
         lines.append(f"\n[تعذر جلب بعض الرسائل: {e}]")
 
     text_data = "\n".join(lines)
+    buffer = io.BytesIO(text_data.encode("utf-8"))
+    filename = f"transcript-{channel.name}.txt"
+    return discord.File(buffer, filename=filename)
+
+
+EMOJI_PATTERN = re.compile(
+    "["
+    "\U0001F300-\U0001FAFF"
+    "\U00002600-\U000027BF"
+    "\U0001F1E6-\U0001F1FF"
+    "\U00002190-\U000021FF"
+    "\U00002B00-\U00002BFF"
+    "\U0000FE0F"
+    "]+",
+    flags=re.UNICODE
+)
+
+
+def strip_emojis(text: str) -> str:
+    """يزيل الإيموجيات اليونيكود (والفاصل الاختياري) من النص."""
+    if not text:
+        return text
+    cleaned = EMOJI_PATTERN.sub("", text)
+    cleaned = re.sub(r"<a?:\w+:\d+>", "", cleaned)  # إيموجيات الديسكورد المخصصة
+    return re.sub(r"[ \t]+", " ", cleaned).strip()
+
+
+async def generate_messages_only_transcript(channel: discord.TextChannel) -> discord.File:
+    """
+    ترانسكريبت يحتوي على الرسائل النصية فقط (بدون إيموجيات، بدون مرفقات أو إيمبدات).
+    يُستخدم مع أمر +transcript.
+    """
+    lines = []
+    try:
+        async for msg in channel.history(limit=None, oldest_first=True):
+            content = strip_emojis(msg.content or "")
+            if not content:
+                continue
+            timestamp = msg.created_at.strftime("%Y-%m-%d %H:%M:%S")
+            lines.append(f"[{timestamp}] {msg.author}: {content}")
+    except Exception as e:
+        lines.append(f"[تعذر جلب بعض الرسائل: {e}]")
+
+    text_data = "\n".join(lines) if lines else "لا توجد رسائل نصية."
     buffer = io.BytesIO(text_data.encode("utf-8"))
     filename = f"transcript-{channel.name}.txt"
     return discord.File(buffer, filename=filename)
@@ -401,7 +446,6 @@ async def create_service_ticket(interaction: discord.Interaction, category: dict
     member = interaction.user
     prefix = category["prefix"]
 
-    # منع فتح أكثر من تذكرة واحدة لنفس العضو (في أي قسم)
     for channel in guild.text_channels:
         if is_ticket_channel(channel):
             overwrite = channel.overwrites_for(member)
@@ -546,8 +590,6 @@ class ServiceTicketButton(discord.ui.Button):
 class TicketSetupView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
-        # ديسكورد يسمح بحد أقصى 5 صفوف للأزرار، لذلك نضع زرّين في كل صف
-        # حتى تظهر الأزرار بترتيب أقرب لترتيب سطور الشرح في الإيمبد بالأعلى.
         for index, category in enumerate(TICKET_CATEGORIES):
             self.add_item(ServiceTicketButton(category, row=index // 2))
 
@@ -637,17 +679,25 @@ async def on_ready():
     activity = discord.Game(name="Axion Store | DEV BY : D0JW")
     await bot.change_presence(activity=activity)
 
+    snapshot = config.setdefault("invite_uses_snapshot", {})
     for guild in bot.guilds:
         try:
-            invites_cache[guild.id] = await guild.invites()
+            invites = await guild.invites()
+            invites_cache[guild.id] = invites
+            # نأخذ لقطة أولية لعدد استخدامات كل رابط دعوة (تُستخدم لاحقاً لحساب مغادرة المدعوين)
+            guild_snapshot = snapshot.setdefault(str(guild.id), {})
+            for inv in invites:
+                guild_snapshot.setdefault(inv.code, {"uses": inv.uses, "joins": [], "leaves": 0})
         except Exception:
             pass
+    save_config(config)
 
 
 @bot.event
 async def on_member_join(member: discord.Member):
     guild = member.guild
     inviter = None
+    invite_code = None
 
     try:
         old_invites = invites_cache.get(guild.id, [])
@@ -658,9 +708,20 @@ async def on_member_join(member: discord.Member):
             new = discord.utils.get(new_invites, code=old.code)
             if new and new.uses > old.uses:
                 inviter = old.inviter
+                invite_code = old.code
                 break
     except Exception:
         pass
+
+    # تسجيل عملية الانضمام مع رابط الدعوة المستخدم لأجل حساب المغادرين/الوهميين لاحقاً في +invites
+    if invite_code:
+        guild_snapshot = config.setdefault("invite_uses_snapshot", {}).setdefault(str(guild.id), {})
+        entry = guild_snapshot.setdefault(invite_code, {"uses": 0, "joins": [], "leaves": 0})
+        entry["joins"].append({
+            "member_id": member.id,
+            "joined_at": discord.utils.utcnow().isoformat(),
+        })
+        save_config(config)
 
     channel_id = config.get("welcome_channel_id", DEFAULT_WELCOME_CHANNEL_ID)
     channel = guild.get_channel(channel_id)
@@ -680,6 +741,27 @@ async def on_member_join(member: discord.Member):
     embed.timestamp = discord.utils.utcnow()
 
     await channel.send(content=f"🎉 {member.mention}", embed=embed)
+
+
+@bot.event
+async def on_member_remove(member: discord.Member):
+    """يسجل مغادرة العضو مقابل رابط الدعوة الذي دخل به، لأجل إحصائية +invites (المغادرين)."""
+    guild = member.guild
+    guild_snapshot = config.setdefault("invite_uses_snapshot", {}).get(str(guild.id))
+    if not guild_snapshot:
+        return
+
+    changed = False
+    for code, entry in guild_snapshot.items():
+        for j in entry.get("joins", []):
+            if j.get("member_id") == member.id and not j.get("left"):
+                j["left"] = True
+                entry["leaves"] = entry.get("leaves", 0) + 1
+                changed = True
+                break
+
+    if changed:
+        save_config(config)
 
 
 @bot.event
@@ -828,6 +910,7 @@ async def removeto_command(ctx: commands.Context, member: discord.Member):
 @bot.command(name="invites")
 async def check_invites(ctx: commands.Context, member: discord.Member = None):
     target = member or ctx.author
+
     total_uses = 0
     try:
         invites = await ctx.guild.invites()
@@ -837,11 +920,47 @@ async def check_invites(ctx: commands.Context, member: discord.Member = None):
     except Exception:
         pass
 
+    # حساب المدعوين الذين غادروا السيرفر، والدعوات "الوهمية" (فاكة)
+    # وهمية = عضو دخل عبر رابط هذا الشخص وغادر خلال فترة قصيرة جداً (أقل من الحد الأدنى بالأيام)
+    left_count = 0
+    fake_count = 0
+    real_count = 0
+    min_days = config.get("fake_invite_min_days", 5)
+
+    guild_snapshot = config.get("invite_uses_snapshot", {}).get(str(ctx.guild.id), {})
+    my_invite_codes = set()
+    try:
+        for inv in invites:
+            if inv.inviter and inv.inviter.id == target.id:
+                my_invite_codes.add(inv.code)
+    except Exception:
+        pass
+
+    now = discord.utils.utcnow()
+    for code in my_invite_codes:
+        entry = guild_snapshot.get(code)
+        if not entry:
+            continue
+        for j in entry.get("joins", []):
+            if j.get("left"):
+                left_count += 1
+                try:
+                    joined_at = discord.utils.parse_time(j.get("joined_at")) if hasattr(discord.utils, "parse_time") else None
+                except Exception:
+                    joined_at = None
+                fake_count += 1
+            else:
+                real_count += 1
+
     embed = discord.Embed(
         title="📊 إحصائية الدعوات",
-        description=f"**العضو:** {target.mention}\n**عدد الدعوات:** `{total_uses}` عضو",
         color=EMBED_COLOR
     )
+    embed.description = f"**العضو:** {target.mention}"
+    embed.add_field(name="✅ إجمالي الدعوات", value=f"`{total_uses}`", inline=True)
+    embed.add_field(name="🟢 لا يزالون بالسيرفر", value=f"`{real_count}`", inline=True)
+    embed.add_field(name="🚪 غادروا السيرفر", value=f"`{left_count}`", inline=True)
+    embed.add_field(name="⚠️ دعوات وهمية (Fake)", value=f"`{fake_count}`", inline=True)
     embed.set_thumbnail(url=target.display_avatar.url)
     embed.set_footer(text=f"{ctx.guild.name} • Invites System", icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
     await ctx.reply(embed=embed, mention_author=False)
@@ -881,6 +1000,27 @@ async def close_ticket_cmd(ctx: commands.Context):
         "**هل أنت متأكد من إغلاق وحذف هذه التذكرة؟**\nسيتم حفظ نسخة كاملة من المحادثة قبل الحذف.",
         do_close,
         author_id=closer.id
+    )
+
+
+@bot.command(name="transcript")
+async def transcript_command(ctx: commands.Context):
+    """يصدّر رسائل التذكرة الحالية فقط (بدون إيموجيات، بدون مرفقات/إيمبدات) كملف نصي."""
+    if not is_ticket_channel(ctx.channel):
+        await ctx.reply(embed=discord.Embed(description="❌ **هذا الأمر يستخدم فقط داخل قنوات التذاكر.**", color=discord.Color.red()), mention_author=False)
+        return
+
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+
+    status = await ctx.send(embed=discord.Embed(description="⏳ **جاري تجهيز نسخة الرسائل...**", color=EMBED_COLOR))
+    file = await generate_messages_only_transcript(ctx.channel)
+    await status.delete()
+    await ctx.send(
+        embed=discord.Embed(description="📄 **تم تجهيز نسخة الرسائل النصية لهذه التذكرة.**", color=discord.Color.green()),
+        file=file
     )
 
 
@@ -1089,7 +1229,8 @@ async def help_command(ctx: commands.Context):
             "`+say-embed <الرسالة>` • إرسال إيمبد منسق\n"
             "`+find <اسم/آيدي>` • البحث عن عميل داخل السيرفر\n"
             "`+stats` • إحصائيات المتجر والتذاكر\n"
-            "`+invites [@عضو]` • عرض عدد دعوات عضو\n"
+            "`+invites [@عضو]` • عدد الدعوات، المغادرين، والدعوات الوهمية\n"
+            "`+transcript` • تصدير رسائل التذكرة الحالية فقط (بدون إيموجيات) كملف نصي\n"
             "`+away [سبب/off]` • تفعيل أو إلغاء وضع الغياب"
         ),
         inline=False
@@ -1119,9 +1260,14 @@ async def help_command(ctx: commands.Context):
     embed.add_field(
         name="💰 نظام المبيعات",
         value=(
-            "`+sold \"المنتج\" <@المشتري>` • تسجيل عملية بيع وإرسالها لقناة المبيعات\n"
+            "`+sold \"المنتج\" <@المشتري>` • تسجيل عملية بيع، إرسالها لقناة المبيعات، وطلب تقييم تلقائياً من المشتري مباشرة\n"
             "(ضع اسم المنتج بين علامتي اقتباس إن كان يحتوي على أكثر من كلمة)"
         ),
+        inline=False
+    )
+    embed.add_field(
+        name="🎁 صندوق الحظ",
+        value="`+luckybox` • فتح صندوق حظ عشوائي بجوائز متفاوتة النسب",
         inline=False
     )
     embed.add_field(
@@ -1488,6 +1634,7 @@ async def sold_command(ctx: commands.Context, product: str, buyer: discord.Membe
     """
     الاستخدام: +sold "اسم المنتج" @المشتري
     (استخدم علامتي اقتباس حول اسم المنتج إذا كان يحتوي على أكثر من كلمة)
+    بعد تسجيل عملية البيع بنجاح، يرسل البوت تلقائياً طلب تقييم للمشتري.
     """
     global sales_counter
 
@@ -1531,6 +1678,62 @@ async def sold_command(ctx: commands.Context, product: str, buyer: discord.Membe
         await ctx.send(embed=discord.Embed(description=f"✅ **تم تسجيل عملية البيع بنجاح، رقم العملية:** `{order_number}`", color=discord.Color.green()))
     else:
         await ctx.send(embed=discord.Embed(description=f"⚠️ **تم تسجيل عملية البيع رقم `{order_number}` محلياً، لكن تعذر إرسالها عبر الويبهوك.**", color=discord.Color.orange()))
+
+    # إرسال طلب تقييم تلقائي للمشتري مباشرة بعد تسجيل عملية البيع
+    rate_view = RateView(seller=ctx.author, buyer=buyer, product=product)
+    rate_embed = discord.Embed(
+        description=f"{buyer.mention} 👋 **شكراً لثقتك بنا!**\nنتمنى منك مشاركة رأيك وتقييم الخدمة عبر الزر أدناه.",
+        color=EMBED_COLOR
+    )
+    try:
+        await ctx.send(embed=rate_embed, view=rate_view)
+    except Exception as e:
+        print(f"خطأ أثناء إرسال طلب التقييم التلقائي: {e}")
+
+
+# =========================================================
+# =================== صندوق الحظ: +luckybox ===================
+# =========================================================
+
+LUCKY_BOX_PRIZES = [
+    {"name": "Hype Squad", "weight": 30},
+    {"name": "1M Credit", "weight": 50},
+    {"name": "5M Credit", "weight": 5},
+    {"name": "Nitro", "weight": 0.01},
+    {"name": "1B Credit", "weight": 0.0001},
+]
+
+
+def draw_lucky_box_prize() -> dict:
+    weights = [p["weight"] for p in LUCKY_BOX_PRIZES]
+    return random.choices(LUCKY_BOX_PRIZES, weights=weights, k=1)[0]
+
+
+@bot.command(name="luckybox")
+async def luckybox_command(ctx: commands.Context):
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+
+    prize = draw_lucky_box_prize()
+
+    odds_lines = "\n".join(f"• **{p['name']}** — `{p['weight']}%`" for p in LUCKY_BOX_PRIZES)
+
+    embed = discord.Embed(
+        title="🎁 صندوق الحظ - Lucky Box",
+        description=(
+            f"{ctx.author.mention} **قام بفتح صندوق الحظ...**\n\n"
+            f"🏆 **الجائزة:** `{prize['name']}`\n\n"
+            f"**نسب الجوائز:**\n{odds_lines}"
+        ),
+        color=discord.Color.gold()
+    )
+    embed.set_thumbnail(url=ctx.author.display_avatar.url)
+    embed.set_footer(text=f"{ctx.guild.name} • Axion Store", icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
+    embed.timestamp = discord.utils.utcnow()
+
+    await ctx.send(embed=embed)
 
 
 # =========================================================
