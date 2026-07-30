@@ -14,8 +14,14 @@ load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN") or os.getenv("BOT_TOKEN")
 SOLD_WEBHOOK_URL = os.getenv("SOLD_WEBHOOK_URL", "")
-CONFIG_FILE = "config.json"
-SALES_COUNTER_FILE = "sales_counter.json"
+# مسار التخزين الدائم: Railway يضبط RAILWAY_VOLUME_MOUNT_PATH تلقائياً فقط إذا قمت
+# بربط Volume بالخدمة من لوحة تحكم Railway. بدون Volume، أي ملف محلي يُمسح بالكامل
+# عند كل إعادة تشغيل/نشر لأن القرص نفسه مؤقت (ephemeral). راجع تعليمات الإعداد بالأسفل.
+DATA_DIR = os.getenv("DATA_DIR") or os.getenv("RAILWAY_VOLUME_MOUNT_PATH") or "."
+os.makedirs(DATA_DIR, exist_ok=True)
+
+CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
+SALES_COUNTER_FILE = os.path.join(DATA_DIR, "sales_counter.json")
 
 # ==== الإعدادات الأساسية ====
 DEFAULT_WELCOME_CHANNEL_ID = 1524371159020343318
