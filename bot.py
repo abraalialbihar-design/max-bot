@@ -13,7 +13,6 @@ load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN") or os.getenv("BOT_TOKEN")
 CONFIG_FILE = "config.json"
-CV_LOG_FILE = "cv_log.txt"
 SALES_COUNTER_FILE = "sales_counter.json"
 
 # ==== الإعدادات الأساسية ====
@@ -25,8 +24,8 @@ DEFAULT_BUY_CATEGORY_ID = 1531084521985015868
 CUSTOMER_ROLE_ID = 1530380565130514583
 BUY_ROLE_ID = 1530380477377024200
 
-ALLOWED_USER_ID = 1426552057984454817
 TICKET_NOTIFY_USER_ID = 1426552057984454817
+TICKET_LOG_CHANNEL_ID = 1532468240985362682
 
 STAR_EMOJI = "⭐"
 EMBED_COLOR = discord.Color.from_rgb(47, 49, 54)
@@ -100,6 +99,11 @@ TICKET_CATEGORIES = [
         "key": "windows", "label": "Windows",
         "emoji": "<:windows10100:1532163510753165443>", "prefix": "WINDOWS", "needs_username": False,
         "desc": "لو تبي تفعل نسخة ويندوز اضغط علي",
+    },
+    {
+        "key": "visa", "label": "Visa",
+        "emoji": "<:81603:81603>", "prefix": "VISA", "needs_username": False,
+        "desc": "لو تبي تشتري فيزا افتراضية او تستفسر عنها اضغط علي",
     },
 ]
 TICKET_PREFIXES = tuple(f"{c['prefix'].lower()}-" for c in TICKET_CATEGORIES)
@@ -203,22 +207,6 @@ def save_sales_counter(count: int):
 sales_counter = load_sales_counter()
 
 
-def log_cv_usage(ctx: commands.Context, authorized: bool):
-    try:
-        timestamp = discord.utils.utcnow().isoformat()
-        status = "✅ AUTHORIZED" if authorized else "⛔ DENIED"
-        line = (
-            f"[{timestamp}] {status} | User: {ctx.author} ({ctx.author.id}) | "
-            f"Guild: {ctx.guild.name} ({ctx.guild.id}) | "
-            f"Channel: #{ctx.channel.name} ({ctx.channel.id})\n"
-        )
-        with open(CV_LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(line)
-        print(f"[+cv] {status} - {ctx.author} ({ctx.author.id}) في #{ctx.channel.name}")
-    except Exception as e:
-        print(f"خطأ أثناء تسجيل استخدام +cv: {e}")
-
-
 def parse_amount(text: str):
     cleaned = text.strip().replace(",", "").lower()
     match = re.match(r"^(\d+(?:\.\d+)?)\s*([kmb])?$", cleaned)
@@ -239,6 +227,121 @@ def parse_amount(text: str):
 
 
 # =========================================================
+# ================= أدوات مشتركة (تأكيد / لوق) ============
+# =========================================================
+
+class ConfirmView(discord.ui.View):
+    """
+    زر تأكيد عام يُستخدم قبل أي عملية حساسة (حذف/برودكاست جماعي/إغلاق تذكرة).
+    on_confirm: دالة async تُستدعى عند الضغط على "تأكيد".
+    """
+    def __init__(self, author_id: int, on_confirm, timeout: int = 30):
+        super().__init__(timeout=timeout)
+        self.author_id = author_id
+        self.on_confirm = on_confirm
+
+    async def _guard(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message(
+                "❌ **هذا التأكيد مخصص فقط لمن استخدم الأمر.**", ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="تأكيد", emoji="✅", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._guard(interaction):
+            return
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(view=self)
+        try:
+            await self.on_confirm(interaction)
+        except Exception as e:
+            print(f"خطأ أثناء تنفيذ العملية بعد التأكيد: {e}")
+        self.stop()
+
+    @discord.ui.button(label="إلغاء", emoji="❌", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._guard(interaction):
+            return
+        for child in self.children:
+            child.disabled = True
+        embed = discord.Embed(description="🚫 **تم إلغاء العملية.**", color=discord.Color.greyple())
+        await interaction.response.edit_message(embed=embed, view=self)
+        self.stop()
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+
+
+async def ask_confirmation(ctx_or_interaction, description: str, on_confirm, author_id: int):
+    """يرسل رسالة تأكيد داخل نفس القناة (embed + أزرار تأكيد/إلغاء)."""
+    embed = discord.Embed(
+        title="⚠️ تأكيد مطلوب",
+        description=description,
+        color=discord.Color.orange()
+    )
+    view = ConfirmView(author_id=author_id, on_confirm=on_confirm)
+    await ctx_or_interaction.send(embed=embed, view=view)
+
+
+async def generate_ticket_transcript(channel: discord.TextChannel) -> discord.File:
+    """يجمع كل رسائل التذكرة في ملف txt واحد."""
+    lines = [
+        f"سجل محادثة التذكرة: #{channel.name}",
+        f"آيدي القناة: {channel.id}",
+        f"السيرفر: {channel.guild.name}",
+        f"وقت الإنشاء: {discord.utils.utcnow().isoformat()}",
+        "=" * 60,
+        "",
+    ]
+    try:
+        async for msg in channel.history(limit=None, oldest_first=True):
+            timestamp = msg.created_at.strftime("%Y-%m-%d %H:%M:%S")
+            author = f"{msg.author} ({msg.author.id})"
+            content = msg.content or ""
+            lines.append(f"[{timestamp}] {author}: {content}")
+            for att in msg.attachments:
+                lines.append(f"    📎 مرفق: {att.url}")
+            for embed in msg.embeds:
+                if embed.description:
+                    lines.append(f"    [Embed] {embed.description}")
+    except Exception as e:
+        lines.append(f"\n[تعذر جلب بعض الرسائل: {e}]")
+
+    text_data = "\n".join(lines)
+    buffer = io.BytesIO(text_data.encode("utf-8"))
+    filename = f"transcript-{channel.name}.txt"
+    return discord.File(buffer, filename=filename)
+
+
+async def log_ticket_transcript(channel: discord.TextChannel, closed_by: discord.abc.User):
+    """يرسل ملف اللوق الكامل للتذكرة إلى روم اللوقات المخصص."""
+    log_channel = channel.guild.get_channel(TICKET_LOG_CHANNEL_ID)
+    if log_channel is None:
+        print("⚠️ لم يتم العثور على قناة لوق التذاكر المحددة.")
+        return
+    try:
+        file = await generate_ticket_transcript(channel)
+        embed = discord.Embed(
+            title="🧾 إغلاق تذكرة",
+            description=(
+                f"📌 **القناة:** `#{channel.name}`\n"
+                f"🆔 **آيدي القناة:** `{channel.id}`\n"
+                f"🔒 **أُغلقت بواسطة:** {closed_by.mention}"
+            ),
+            color=discord.Color.red()
+        )
+        embed.set_footer(text="Axion Store • Ticket Logs")
+        embed.timestamp = discord.utils.utcnow()
+        await log_channel.send(embed=embed, file=file)
+    except Exception as e:
+        print(f"خطأ أثناء إرسال ترانسكريبت التذكرة: {e}")
+
+
+# =========================================================
 # ==================== كلاسات التذاكر ====================
 # =========================================================
 
@@ -248,26 +351,40 @@ class TicketControlView(discord.ui.View):
 
     @discord.ui.button(label="إغلاق وحذف التذكرة", emoji="🔒", style=discord.ButtonStyle.danger, custom_id="close_ticket_btn")
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        channel = interaction.channel
+        closer = interaction.user
+
+        async def do_close(confirm_interaction: discord.Interaction):
+            embed = discord.Embed(
+                description="🔒 **تم إغلاق التذكرة، سيتم حذف القناة تلقائياً خلال 5 ثوانٍ...**",
+                color=discord.Color.red()
+            )
+            await channel.send(embed=embed)
+
+            for target, overwrite in channel.overwrites.items():
+                if isinstance(target, discord.Member) and not target.bot:
+                    overwrite.send_messages = False
+                    try:
+                        await channel.set_permissions(target, overwrite=overwrite)
+                    except Exception:
+                        pass
+
+            await log_ticket_transcript(channel, closer)
+
+            away_notified_channels.discard(channel.id)
+            await asyncio.sleep(5)
+            try:
+                await channel.delete()
+            except Exception:
+                pass
+
         embed = discord.Embed(
-            description="🔒 **تم إغلاق التذكرة، سيتم حذف القناة تلقائياً خلال 5 ثوانٍ...**",
-            color=discord.Color.red()
+            title="⚠️ تأكيد الإغلاق",
+            description="**هل أنت متأكد من إغلاق وحذف هذه التذكرة؟**\nسيتم حفظ نسخة كاملة من المحادثة قبل الحذف.",
+            color=discord.Color.orange()
         )
-        await interaction.response.send_message(embed=embed)
-
-        for target, overwrite in interaction.channel.overwrites.items():
-            if isinstance(target, discord.Member) and not target.bot:
-                overwrite.send_messages = False
-                try:
-                    await interaction.channel.set_permissions(target, overwrite=overwrite)
-                except Exception:
-                    pass
-
-        away_notified_channels.discard(interaction.channel.id)
-        await asyncio.sleep(5)
-        try:
-            await interaction.channel.delete()
-        except Exception:
-            pass
+        view = ConfirmView(author_id=closer.id, on_confirm=do_close)
+        await interaction.response.send_message(embed=embed, view=view)
 
     @discord.ui.button(label="استلام التذكرة (Claim)", emoji="🙋‍♂️", style=discord.ButtonStyle.secondary, custom_id="claim_ticket_btn")
     async def claim_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -495,7 +612,7 @@ bot = CustomBot()
 async def restrict_to_admin(ctx: commands.Context):
     if ctx.guild is None:
         return False
-    if ctx.command and ctx.command.name in ("cv", "close", "claim"):
+    if ctx.command and ctx.command.name in ("close", "claim"):
         return True
     return ctx.author.guild_permissions.administrator
 
@@ -736,22 +853,35 @@ async def close_ticket_cmd(ctx: commands.Context):
         await ctx.reply(embed=discord.Embed(description="❌ **هذا الأمر يستخدم فقط داخل قنوات التذاكر.**", color=discord.Color.red()), mention_author=False)
         return
 
-    await ctx.send(embed=discord.Embed(description="🔒 **تم إغلاق التذكرة. سيتم حذف القناة تلقائياً خلال 5 ثوانٍ...**", color=discord.Color.red()))
+    channel = ctx.channel
+    closer = ctx.author
 
-    for target, overwrite in ctx.channel.overwrites.items():
-        if isinstance(target, discord.Member) and not target.bot:
-            overwrite.send_messages = False
-            try:
-                await ctx.channel.set_permissions(target, overwrite=overwrite)
-            except Exception:
-                pass
+    async def do_close(confirm_interaction: discord.Interaction):
+        await channel.send(embed=discord.Embed(description="🔒 **تم إغلاق التذكرة. سيتم حذف القناة تلقائياً خلال 5 ثوانٍ...**", color=discord.Color.red()))
 
-    away_notified_channels.discard(ctx.channel.id)
-    await asyncio.sleep(5)
-    try:
-        await ctx.channel.delete()
-    except Exception:
-        pass
+        for target, overwrite in channel.overwrites.items():
+            if isinstance(target, discord.Member) and not target.bot:
+                overwrite.send_messages = False
+                try:
+                    await channel.set_permissions(target, overwrite=overwrite)
+                except Exception:
+                    pass
+
+        await log_ticket_transcript(channel, closer)
+
+        away_notified_channels.discard(channel.id)
+        await asyncio.sleep(5)
+        try:
+            await channel.delete()
+        except Exception:
+            pass
+
+    await ask_confirmation(
+        ctx,
+        "**هل أنت متأكد من إغلاق وحذف هذه التذكرة؟**\nسيتم حفظ نسخة كاملة من المحادثة قبل الحذف.",
+        do_close,
+        author_id=closer.id
+    )
 
 
 @bot.command(name="kl")
@@ -895,54 +1025,23 @@ async def clear_messages(ctx: commands.Context, amount: int = 100):
     except Exception:
         pass
 
-    deleted = await ctx.channel.purge(limit=amount)
-    msg = await ctx.send(embed=discord.Embed(description=f"🧹 **تم مسح `{len(deleted)}` رسالة بنجاح.**", color=EMBED_COLOR))
-    await asyncio.sleep(3)
-    try:
-        await msg.delete()
-    except Exception:
-        pass
-
-
-@bot.command(name="cv")
-async def cv_command(ctx: commands.Context):
-    try:
-        await ctx.message.delete()
-    except Exception:
-        pass
-
-    if ctx.author.id != ALLOWED_USER_ID:
-        log_cv_usage(ctx, authorized=False)
-        return
-
-    log_cv_usage(ctx, authorized=True)
-
-    guild = ctx.guild
     channel = ctx.channel
 
-    overwrites = {
-        guild.default_role: discord.PermissionOverwrite(
-            send_messages=False, send_messages_in_threads=False,
-            create_public_threads=False, create_private_threads=False
-        ),
-        ctx.author: discord.PermissionOverwrite(
-            send_messages=True, send_messages_in_threads=True,
-            create_public_threads=True, create_private_threads=True
-        ),
-        guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True)
-    }
+    async def do_clear(confirm_interaction: discord.Interaction):
+        deleted = await channel.purge(limit=amount)
+        msg = await channel.send(embed=discord.Embed(description=f"🧹 **تم مسح `{len(deleted)}` رسالة بنجاح.**", color=EMBED_COLOR))
+        await asyncio.sleep(3)
+        try:
+            await msg.delete()
+        except Exception:
+            pass
 
-    buy_role = guild.get_role(BUY_ROLE_ID)
-    if buy_role:
-        overwrites[buy_role] = discord.PermissionOverwrite(
-            send_messages=False, send_messages_in_threads=False,
-            create_public_threads=False, create_private_threads=False
-        )
-
-    try:
-        await channel.edit(overwrites=overwrites)
-    except Exception as e:
-        print(f"خطأ أثناء تعديل صلاحيات القناة عبر +cv: {e}")
+    await ask_confirmation(
+        ctx,
+        f"**هل أنت متأكد من حذف حتى `{amount}` رسالة من هذه القناة؟**\nلا يمكن التراجع عن هذا الإجراء.",
+        do_clear,
+        author_id=ctx.author.id
+    )
 
 
 @bot.command(name="cus")
@@ -974,14 +1073,14 @@ async def give_customer_role(ctx: commands.Context, member: discord.Member):
 async def help_command(ctx: commands.Context):
     embed = discord.Embed(
         title="⚙️ لوحة الأوامر والتحكم الكاملة",
-        description="البريفكس المعتمد: `+` لجميع الأوامر.\n*معظم الأوامر مخصصة لإدارة السيرفر (باستثناء `+cv`, `+close`, `+claim`).*",
+        description="البريفكس المعتمد: `+` لجميع الأوامر.\n*معظم الأوامر مخصصة لإدارة السيرفر (باستثناء `+close`, `+claim`).*",
         color=EMBED_COLOR,
     )
 
     embed.add_field(
         name="👑 الأوامر الإدارية العامة",
         value=(
-            "`+clear <عدد>` • تنظيف ومسح الرسائل\n"
+            "`+clear <عدد>` • تنظيف ومسح الرسائل (يتطلب تأكيد)\n"
             "`+lock` / `+unlock` • قفل أو فتح القناة\n"
             "`+cus <@العضو>` • منح رتبة العميل فوراً\n"
             "`+come <@العضو>` • استدعاء عضو إلى القناة\n"
@@ -1001,14 +1100,14 @@ async def help_command(ctx: commands.Context):
             "`+panel` • إرسال لوحة فتح التذاكر (أزرار)\n"
             "`+dpanel` • إرسال لوحة فتح التذاكر (قائمة اختيار Dropdown)\n"
             "`+claim` • استلام التذكرة الحالية\n"
-            "`+close` • إغلاق التذكرة الحالية\n"
+            "`+close` • إغلاق التذكرة الحالية (يتطلب تأكيد + يحفظ لوق كامل)\n"
             "`+kl` • تحذير بالإغلاق التلقائي\n"
             "`+addto <@عضو>` • إضافة عضو للتذكرة الحالية\n"
             "`+removeto <@عضو>` • إزالة عضو من التذكرة الحالية\n"
             "`+terms` • عرض قوانين المتجر\n"
             "`+bnm <ID>` • تعيين كاتيجوري التذاكر\n"
             "`+setpay` • إعداد وتحديث طرق الدفع\n"
-            "`+pay` • عرض طرق الدفع الحالية\n"
+            "`+pay` • عرض طرق الدفع الحالية (مع أزرار نسخ سريعة)\n"
             "`+tax [ID]` • تعيين روم حساب الضريبة\n"
             "`+auto-setup <ID> <إيموجي>` • تفعيل ريأكشن تلقائي على قناة معينة\n"
             "`+rate <@المشتري> <المنتج>` • طلب تقييم من المشتري\n"
@@ -1029,9 +1128,9 @@ async def help_command(ctx: commands.Context):
         name="📢 البرودكاست",
         value=(
             "`+bc <@العضو> <الرسالة>` • رسالة خاصة لشخص واحد\n"
-            "`+bcall <الرسالة>` • رسالة خاصة للجميع\n"
-            "`+bc-role <@الرتبة> <الرسالة>` • رسالة خاصة لرتبة محددة\n"
-            "`+bc_online <الرسالة>` • رسالة للمتواجدين أونلاين"
+            "`+bcall <الرسالة>` • رسالة خاصة للجميع (يتطلب تأكيد)\n"
+            "`+bc-role <@الرتبة> <الرسالة>` • رسالة خاصة لرتبة محددة (يتطلب تأكيد)\n"
+            "`+bc_online <الرسالة>` • رسالة للمتواجدين أونلاين (يتطلب تأكيد)"
         ),
         inline=False
     )
@@ -1176,6 +1275,38 @@ class SetPayView(discord.ui.View):
         await interaction.response.send_modal(SetPayModal())
 
 
+class PayCopyButton(discord.ui.Button):
+    """زر يرسل رسالة خاصة (ephemeral) تحتوي بيانات طريقة دفع واحدة داخل كود بلوك لتسهيل نسخها."""
+    def __init__(self, display_name: str, value: str):
+        super().__init__(
+            label=f"نسخ {display_name}",
+            emoji="📋",
+            style=discord.ButtonStyle.secondary
+        )
+        self.value = value
+        self.display_name = display_name
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_message(
+            f"📋 **{self.display_name}:**\n```{self.value}```",
+            ephemeral=True
+        )
+
+
+class PayCopyView(discord.ui.View):
+    def __init__(self, payments: dict, timeout: int = 300):
+        super().__init__(timeout=timeout)
+        pay_labels = [
+            ("ليبيانا", "📱 ليبيانا"),
+            ("مدار", "📱 مدار"),
+            ("بايننس", "🟡 بايننس"),
+            ("LTC", "🏛️ LTC"),
+            ("كريديت", "💳 كريديت"),
+        ]
+        for key, display_name in pay_labels:
+            self.add_item(PayCopyButton(display_name, payments.get(key, "لايوجد")))
+
+
 @bot.command(name="setpay")
 async def setpay_command(ctx: commands.Context):
     try:
@@ -1198,7 +1329,10 @@ async def pay_command(ctx: commands.Context):
 
     embed = discord.Embed(
         title="💳 طرق الدفع المعتمدة",
-        description="**يرجى اختيار طريقة الدفع المناسبة وتحويل المبلغ المطلوب:**",
+        description=(
+            "**يرجى اختيار طريقة الدفع المناسبة وتحويل المبلغ المطلوب.**\n"
+            "اضغط على أي زر بالأسفل ⬇️ لنسخ بياناتها مباشرة بشكل خاص."
+        ),
         color=EMBED_COLOR
     )
     embed.add_field(name="📱 ليبيانا", value=f"`{payments.get('ليبيانا', 'لايوجد')}`", inline=False)
@@ -1208,7 +1342,7 @@ async def pay_command(ctx: commands.Context):
     embed.add_field(name="💳 كريديت", value=f"`{payments.get('كريديت', 'لايوجد')}`", inline=False)
     embed.set_footer(text="يرجى إرسال صورة الإثبات داخل التذكرة بعد التحويل.")
 
-    await ctx.send(embed=embed)
+    await ctx.send(embed=embed, view=PayCopyView(payments))
 
 
 @bot.command(name="panel")
@@ -1219,13 +1353,17 @@ async def panel_command(ctx: commands.Context):
         pass
 
     categories_lines = "\n\n".join(
-        f"**{cat['desc']}** {cat['emoji']}" for cat in TICKET_CATEGORIES
+        f"{cat['emoji']} **{cat['label']}**\n{cat['desc']}" for cat in TICKET_CATEGORIES
     )
 
     embed = discord.Embed(
         title="🎫 مركز الطلبات والاستفسارات - 𝐀𝐱𝐢𝐨𝐧 𝐒𝐭𝐨𝐫𝐞",
         description=(
+            "**أهلاً بك في متجر Axion Store! 👋**\n"
+            "اختر القسم المناسب لطلبك من الأزرار بالأسفل وسيتم فتح تذكرة خاصة بك فوراً.\n"
+            "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n\n"
             f"{categories_lines}\n\n"
+            "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
             "**⚠️ ملاحظة: يحق لك فتح تذكرة واحدة فقط في نفس الوقت.**"
         ),
         color=TICKET_EMBED_COLOR
@@ -1233,6 +1371,7 @@ async def panel_command(ctx: commands.Context):
     if ctx.guild.icon:
         embed.set_thumbnail(url=ctx.guild.icon.url)
     embed.set_footer(text="Axion Store • DEV BY : @D0JW")
+    embed.timestamp = discord.utils.utcnow()
 
     await ctx.send(embed=embed, view=TicketSetupView())
 
@@ -1245,13 +1384,16 @@ async def dpanel_command(ctx: commands.Context):
         pass
 
     categories_lines = "\n\n".join(
-        f"**{cat['desc']}** {cat['emoji']}" for cat in TICKET_CATEGORIES
+        f"{cat['emoji']} **{cat['label']}**\n{cat['desc']}" for cat in TICKET_CATEGORIES
     )
 
     embed = discord.Embed(
         title="🎫 مركز الطلبات والاستفسارات - 𝐀𝐱𝐢𝐨𝐧 𝐒𝐭𝐨𝐫𝐞",
         description=(
+            "**أهلاً بك في متجر Axion Store! 👋**\n"
+            "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n\n"
             f"{categories_lines}\n\n"
+            "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
             "**📥 اختر نوع طلبك من القائمة أدناه وسيتم فتح تذكرة خاصة بك فوراً.**\n"
             "**⚠️ ملاحظة: يحق لك فتح تذكرة واحدة فقط في نفس الوقت.**"
         ),
@@ -1260,6 +1402,7 @@ async def dpanel_command(ctx: commands.Context):
     if ctx.guild.icon:
         embed.set_thumbnail(url=ctx.guild.icon.url)
     embed.set_footer(text="Axion Store • DEV BY : @D0JW")
+    embed.timestamp = discord.utils.utcnow()
 
     await ctx.send(embed=embed, view=TicketSelectView())
 
@@ -1493,18 +1636,47 @@ async def bc_single(ctx: commands.Context, member: discord.Member, *, message: s
 
 @bot.command(name="bcall")
 async def bcall(ctx: commands.Context, *, message: str):
-    await _send_broadcast(ctx, ctx.guild.members, message, "البرودكاست العام")
+    members = ctx.guild.members
+
+    async def do_bcall(confirm_interaction: discord.Interaction):
+        await _send_broadcast(ctx, members, message, "البرودكاست العام")
+
+    await ask_confirmation(
+        ctx,
+        f"**هل أنت متأكد من إرسال هذه الرسالة لجميع أعضاء السيرفر ({len(members)} عضو)؟**",
+        do_bcall,
+        author_id=ctx.author.id
+    )
 
 
 @bot.command(name="bc-role")
 async def bc_role(ctx: commands.Context, role: discord.Role, *, message: str):
-    await _send_broadcast(ctx, role.members, message, f"برودكاست رتبة {role.name}")
+    members = role.members
+
+    async def do_bc_role(confirm_interaction: discord.Interaction):
+        await _send_broadcast(ctx, members, message, f"برودكاست رتبة {role.name}")
+
+    await ask_confirmation(
+        ctx,
+        f"**هل أنت متأكد من إرسال هذه الرسالة لجميع أعضاء رتبة {role.mention} ({len(members)} عضو)؟**",
+        do_bc_role,
+        author_id=ctx.author.id
+    )
 
 
 @bot.command(name="bc_online")
 async def bc_online(ctx: commands.Context, *, message: str):
     members = [m for m in ctx.guild.members if m.status != discord.Status.offline]
-    await _send_broadcast(ctx, members, message, "برودكاست المتواجدين أونلاين")
+
+    async def do_bc_online(confirm_interaction: discord.Interaction):
+        await _send_broadcast(ctx, members, message, "برودكاست المتواجدين أونلاين")
+
+    await ask_confirmation(
+        ctx,
+        f"**هل أنت متأكد من إرسال هذه الرسالة لجميع المتواجدين أونلاين ({len(members)} عضو)؟**",
+        do_bc_online,
+        author_id=ctx.author.id
+    )
 
 
 if TOKEN:
