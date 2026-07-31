@@ -1802,11 +1802,12 @@ async def sold_command(ctx: commands.Context, product: str, buyer: discord.Membe
 # =========================================================
 
 LUCKY_BOX_PRIZES = [
-    {"name": "Hype Squad", "weight": 30},
-    {"name": "1M Credit", "weight": 50},
-    {"name": "5M Credit", "weight": 5},
-    {"name": "Nitro", "weight": 0.01},
-    {"name": "1B Credit", "weight": 0.0001},
+    {"name": "Hype Squad", "weight": 20},
+    {"name": "1M Credit", "weight": 70},
+    {"name": "5M Credit", "weight": 10},
+    {"name": "Nitro", "weight": 0.1},
+    {"name": "1B Credit", "weight": 0.01},
+    {"name": "10M Credit", "weight": 3},
 ]
 
 
