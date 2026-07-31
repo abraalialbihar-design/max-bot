@@ -109,8 +109,8 @@ TICKET_CATEGORIES = [
         "desc": "لو تبي تشتري فيزا افتراضية او تستفسر عنها اضغط علي",
     },
     {
-        "key": "luckybox", "label": "Lucky Box",
-        "emoji": "🎁", "prefix": "LUCKY", "needs_username": False,
+        "key": "luckybox", "label": "صندوق الحظ",
+        "emoji": "<:834134giftingchampion:1532876102106742814>", "prefix": "LUCKY", "needs_username": False,
         "desc": "لو تبي تشتري صندوق حظ او تستفسر عن جوائزه اضغط علي",
     },
 ]
@@ -1337,7 +1337,7 @@ async def help_command(ctx: commands.Context):
         inline=False
     )
     embed.add_field(
-        name="LUCKY BOX 🎁",
+        name="🎁 صندوق الحظ",
         value=(
             "`+luckybox <@العضو>` • صندوق حظ مخصص لعضو معيّن فقط\n"
             "`+luckybox` (بدون منشن) • صندوق حظ عام، أول من يضغط الزر يفوز\n"
