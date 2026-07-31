@@ -1333,7 +1333,10 @@ async def help_command(ctx: commands.Context):
     )
     embed.add_field(
         name="🎁 صندوق الحظ",
-        value="`+luckybox <@العضو>` • إرسال صندوق حظ مخصص لعضو معيّن، يفتحه بنفسه بزر مباشر",
+        value=(
+            "`+luckybox <@العضو>` • صندوق حظ مخصص لعضو معيّن فقط\n"
+            "`+luckybox` (بدون منشن) • صندوق حظ عام، أول من يضغط الزر يفوز"
+        ),
         inline=False
     )
     embed.add_field(
@@ -1812,82 +1815,100 @@ def draw_lucky_box_prize() -> dict:
     return random.choices(LUCKY_BOX_PRIZES, weights=weights, k=1)[0]
 
 
-def build_luckybox_intro_embed(guild: discord.Guild, gifter: discord.abc.User, recipient: discord.Member) -> discord.Embed:
+def build_luckybox_intro_embed(guild: discord.Guild, gifter: discord.abc.User, recipient: discord.Member = None) -> discord.Embed:
     """الإيمبد الأولي: يعرض معلومات صندوق الحظ ونسب الجوائز قبل الفتح."""
     odds_lines = "\n".join(f"• **{p['name']}** — `{p['weight']}%`" for p in LUCKY_BOX_PRIZES)
-    embed = discord.Embed(
-        title="🎁 صندوق حظ جديد!",
-        description=(
+
+    if recipient is not None:
+        description = (
             f"{recipient.mention} **وصلك صندوق حظ من {gifter.mention}!**\n"
             f"اضغط على الزر بالأسفل ⬇️ لفتحه ومعرفة جائزتك."
-        ),
-        color=discord.Color.gold()
-    )
+        )
+        thumbnail_url = recipient.display_avatar.url
+    else:
+        description = (
+            f"**{gifter.mention} أرسل صندوق حظ عام لجميع الأعضاء! 🎉**\n"
+            f"أول شخص يضغط على الزر بالأسفل ⬇️ هو من يفوز بالجائزة، سارع قبل غيرك!"
+        )
+        thumbnail_url = gifter.display_avatar.url
+
+    embed = discord.Embed(title="🎁 صندوق حظ جديد!", description=description, color=discord.Color.gold())
     embed.add_field(name="🎯 نسب الجوائز", value=odds_lines, inline=False)
-    embed.add_field(name="👤 مخصص لـ", value=recipient.mention, inline=True)
+    if recipient is not None:
+        embed.add_field(name="👤 مخصص لـ", value=recipient.mention, inline=True)
+    else:
+        embed.add_field(name="🌍 النوع", value="صندوق عام (لأي عضو)", inline=True)
     embed.add_field(name="🎁 مُهدى من", value=gifter.mention, inline=True)
-    embed.set_thumbnail(url=recipient.display_avatar.url)
+    embed.set_thumbnail(url=thumbnail_url)
     embed.set_footer(text=f"{guild.name} • Axion Store", icon_url=guild.icon.url if guild.icon else None)
     embed.timestamp = discord.utils.utcnow()
     return embed
 
 
-def build_luckybox_result_embed(guild: discord.Guild, gifter: discord.abc.User, recipient: discord.Member, prize: dict) -> discord.Embed:
+def build_luckybox_result_embed(guild: discord.Guild, gifter: discord.abc.User, winner: discord.abc.User, prize: dict) -> discord.Embed:
     """الإيمبد بعد الفتح: يعرض الجائزة الفائزة فقط."""
     odds_lines = "\n".join(f"• **{p['name']}** — `{p['weight']}%`" for p in LUCKY_BOX_PRIZES)
     embed = discord.Embed(
         title="🎉 تم فتح صندوق الحظ!",
         description=(
-            f"{recipient.mention} **فتح الصندوق وحصل على:**\n\n"
+            f"{winner.mention} **فتح الصندوق وحصل على:**\n\n"
             f"🏆 **{prize['name']}**"
         ),
         color=discord.Color.gold()
     )
     embed.add_field(name="🎯 نسب الجوائز", value=odds_lines, inline=False)
     embed.add_field(name="🎁 مُهدى من", value=gifter.mention, inline=True)
-    embed.set_thumbnail(url=recipient.display_avatar.url)
+    embed.set_thumbnail(url=winner.display_avatar.url)
     embed.set_footer(text=f"{guild.name} • Axion Store", icon_url=guild.icon.url if guild.icon else None)
     embed.timestamp = discord.utils.utcnow()
     return embed
 
 
 class LuckyBoxView(discord.ui.View):
-    def __init__(self, gifter: discord.abc.User, recipient: discord.Member):
+    def __init__(self, gifter: discord.abc.User, recipient: discord.Member = None):
         super().__init__(timeout=None)
         self.gifter = gifter
-        self.recipient = recipient
+        self.recipient = recipient  # None يعني صندوق عام يقدر يفتحه أي أحد
         self.opened = False
 
     @discord.ui.button(label="افتح الصندوق", emoji="🎁", style=discord.ButtonStyle.success, custom_id="open_luckybox_btn")
     async def open_box(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.recipient.id:
+        # لو الصندوق مخصص لعضو معيّن، لا يفتحه إلا هو
+        if self.recipient is not None and interaction.user.id != self.recipient.id:
             await interaction.response.send_message("❌ **هذا الصندوق ليس مخصصاً لك.**", ephemeral=True)
             return
 
+        # هذا الفحص والتعيين بدون أي await بينهما، فهو آمن من التسابق (race condition)
+        # حتى لو ضغط أكثر من شخص بنفس اللحظة على صندوق عام.
         if self.opened:
             await interaction.response.send_message("⚠️ **تم فتح هذا الصندوق بالفعل.**", ephemeral=True)
             return
         self.opened = True
 
+        winner = interaction.user
         prize = draw_lucky_box_prize()
 
         button.disabled = True
         button.label = "تم الفتح ✅"
 
         # نعطّل الزر على الرسالة الأصلية فقط، والنتيجة نرسلها كرسالة جديدة
-        # ظاهرة للجميع في القناة/التذكرة (وليست خاصة بالضاغط فقط).
+        # ظاهرة للجميع في القناة/التذكرة (وليست خاصة بالفاتح فقط).
         await interaction.response.edit_message(view=self)
 
-        result_embed = build_luckybox_result_embed(interaction.guild, self.gifter, self.recipient, prize)
+        result_embed = build_luckybox_result_embed(interaction.guild, self.gifter, winner, prize)
         try:
-            await interaction.channel.send(content=self.recipient.mention, embed=result_embed)
+            await interaction.channel.send(content=winner.mention, embed=result_embed)
         except Exception as e:
             print(f"⚠️ تعذر إرسال نتيجة صندوق الحظ في القناة: {e}")
 
 
 @bot.command(name="luckybox")
-async def luckybox_command(ctx: commands.Context, recipient: discord.Member):
-    """الاستخدام: +luckybox <@العضو المخصص له الصندوق>"""
+async def luckybox_command(ctx: commands.Context, recipient: discord.Member = None):
+    """
+    الاستخدام:
+    +luckybox <@العضو>  -> صندوق حظ مخصص لهذا العضو فقط
+    +luckybox            -> صندوق حظ عام، أول من يضغط الزر يفوز
+    """
     try:
         await ctx.message.delete()
     except Exception:
@@ -1895,7 +1916,10 @@ async def luckybox_command(ctx: commands.Context, recipient: discord.Member):
 
     embed = build_luckybox_intro_embed(ctx.guild, ctx.author, recipient)
     view = LuckyBoxView(gifter=ctx.author, recipient=recipient)
-    await ctx.send(content=recipient.mention, embed=embed, view=view)
+    if recipient is not None:
+        await ctx.send(content=recipient.mention, embed=embed, view=view)
+    else:
+        await ctx.send(embed=embed, view=view)
 
 
 # =========================================================
