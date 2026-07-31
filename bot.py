@@ -1326,7 +1326,7 @@ async def help_command(ctx: commands.Context):
     embed.add_field(
         name="💰 نظام المبيعات",
         value=(
-            "`+sold \"المنتج\" <@المشتري>` • تسجيل عملية بيع، إرسالها لقناة المبيعات، وطلب تقييم تلقائياً من المشتري مباشرة\n"
+            "`+sold <@المشتري> \"المنتج\"` • تسجيل عملية بيع، إرسالها لقناة المبيعات، وطلب تقييم تلقائياً من المشتري مباشرة\n"
             "(ضع اسم المنتج بين علامتي اقتباس إن كان يحتوي على أكثر من كلمة)"
         ),
         inline=False
@@ -1738,10 +1738,10 @@ async def rate_prefix(ctx: commands.Context, buyer: discord.Member, *, product: 
 # =========================================================
 
 @bot.command(name="sold")
-async def sold_command(ctx: commands.Context, product: str, buyer: discord.Member):
+async def sold_command(ctx: commands.Context, buyer: discord.Member, *, product: str):
     """
-    الاستخدام: +sold "اسم المنتج" @المشتري
-    (استخدم علامتي اقتباس حول اسم المنتج إذا كان يحتوي على أكثر من كلمة)
+    الاستخدام: +sold @المشتري اسم المنتج
+    (المنشن أولاً، ثم اسم المنتج بعده - بدون الحاجة لعلامات اقتباس حتى لو كان أكثر من كلمة)
     بعد تسجيل عملية البيع بنجاح، يرسل البوت تلقائياً طلب تقييم للمشتري.
     """
     global sales_counter
@@ -1750,6 +1750,11 @@ async def sold_command(ctx: commands.Context, product: str, buyer: discord.Membe
         await ctx.message.delete()
     except Exception:
         pass
+
+    product = product.strip()
+    if not product:
+        await ctx.send(embed=discord.Embed(description="⚠️ **يجب كتابة اسم المنتج.**\nمثال: `+sold @المشتري اسم المنتج`", color=discord.Color.orange()), delete_after=8)
+        return
 
     sales_counter += 1
     save_sales_counter(sales_counter)
@@ -1769,7 +1774,11 @@ async def sold_command(ctx: commands.Context, product: str, buyer: discord.Membe
     embed.set_footer(text=f"{ctx.guild.name} • تم التسجيل بواسطة {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
     embed.timestamp = discord.utils.utcnow()
 
-    sent_ok = True
+    # نرسل تأكيد عملية البيع دائماً في القناة الحالية (حتى لو تعذّر إرسال الويبهوك)
+    # حتى لا تضيع تفاصيل العملية.
+    await ctx.send(embed=embed)
+
+    webhook_sent = False
     if SOLD_WEBHOOK_URL:
         try:
             async with aiohttp.ClientSession() as session:
@@ -1779,16 +1788,15 @@ async def sold_command(ctx: commands.Context, product: str, buyer: discord.Membe
                     username="Axion Store | Sales",
                     avatar_url=ctx.guild.icon.url if ctx.guild.icon else None
                 )
+            webhook_sent = True
         except Exception as e:
-            sent_ok = False
+            webhook_sent = False
             print(f"خطأ أثناء إرسال ويبهوك عملية البيع: {e}")
-    else:
-        sent_ok = False
 
-    if sent_ok:
-        await ctx.send(embed=discord.Embed(description=f"✅ **تم تسجيل عملية البيع بنجاح، رقم العملية:** `{order_number}`", color=discord.Color.green()))
-    else:
-        await ctx.send(embed=discord.Embed(description=f"⚠️ **تم تسجيل عملية البيع رقم `{order_number}` محلياً، لكن تعذر إرسالها عبر الويبهوك.**", color=discord.Color.orange()))
+    status_text = f"✅ **تم تسجيل عملية البيع بنجاح، رقم العملية:** `{order_number}`"
+    if SOLD_WEBHOOK_URL and not webhook_sent:
+        status_text = f"⚠️ **تم تسجيل عملية البيع رقم `{order_number}` بنجاح هنا، لكن تعذر إرسال نسخة عبر الويبهوك.**"
+    await ctx.send(embed=discord.Embed(description=status_text, color=discord.Color.green() if webhook_sent or not SOLD_WEBHOOK_URL else discord.Color.orange()))
 
     # إرسال طلب تقييم تلقائي للمشتري مباشرة بعد تسجيل عملية البيع
     try:
@@ -1801,13 +1809,14 @@ async def sold_command(ctx: commands.Context, product: str, buyer: discord.Membe
 # =================== صندوق الحظ: +luckybox ===================
 # =========================================================
 
+# الترتيب من الأكثر شيوعاً (أعلى نسبة) إلى الأندر (أقل نسبة)، ومجموع النسب = 100%
 LUCKY_BOX_PRIZES = [
-    {"name": "Hype Squad", "weight": 20},
-    {"name": "1M Credit", "weight": 70},
+    {"name": "1M Credit", "weight": 60},
+    {"name": "Hype Squad", "weight": 25},
     {"name": "5M Credit", "weight": 10},
-    {"name": "Nitro", "weight": 0.1},
-    {"name": "1B Credit", "weight": 0.01},
     {"name": "10M Credit", "weight": 3},
+    {"name": "Nitro", "weight": 1.5},
+    {"name": "1B Credit", "weight": 0.5},
 ]
 
 
