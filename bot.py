@@ -1337,7 +1337,7 @@ async def help_command(ctx: commands.Context):
         inline=False
     )
     embed.add_field(
-        name="🎁 صندوق الحظ",
+        name="🎁 Lucky Box",
         value=(
             "`+luckybox <@العضو>` • صندوق حظ مخصص لعضو معيّن فقط\n"
             "`+luckybox` (بدون منشن) • صندوق حظ عام، أول من يضغط الزر يفوز\n"
