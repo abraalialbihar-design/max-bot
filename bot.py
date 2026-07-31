@@ -108,6 +108,11 @@ TICKET_CATEGORIES = [
         "emoji": "<:81603:1530379444584317091>", "prefix": "VISA", "needs_username": False,
         "desc": "لو تبي تشتري فيزا افتراضية او تستفسر عنها اضغط علي",
     },
+    {
+        "key": "luckybox", "label": "صندوق الحظ",
+        "emoji": "🎁", "prefix": "LUCKY", "needs_username": False,
+        "desc": "لو تبي تشتري صندوق حظ او تستفسر عن جوائزه اضغط علي",
+    },
 ]
 TICKET_PREFIXES = tuple(f"{c['prefix'].lower()}-" for c in TICKET_CATEGORIES)
 TICKET_CATEGORY_BY_KEY = {c["key"]: c for c in TICKET_CATEGORIES}
@@ -1335,7 +1340,8 @@ async def help_command(ctx: commands.Context):
         name="🎁 صندوق الحظ",
         value=(
             "`+luckybox <@العضو>` • صندوق حظ مخصص لعضو معيّن فقط\n"
-            "`+luckybox` (بدون منشن) • صندوق حظ عام، أول من يضغط الزر يفوز"
+            "`+luckybox` (بدون منشن) • صندوق حظ عام، أول من يضغط الزر يفوز\n"
+            "`+luckyinfo [@المشتري]` • إرسال شرح بكل جوائز صندوق الحظ ونسبها"
         ),
         inline=False
     )
@@ -1930,6 +1936,56 @@ async def luckybox_command(ctx: commands.Context, recipient: discord.Member = No
         await ctx.send(content=recipient.mention, embed=embed, view=view)
     else:
         await ctx.send(embed=embed, view=view)
+
+
+def build_luckybox_catalog_embed(guild: discord.Guild, buyer: discord.Member = None) -> discord.Embed:
+    """إيمبد شرح تفصيلي بكل الجوائز المتاحة داخل صندوق الحظ ونسبة كل جائزة."""
+    sorted_prizes = sorted(LUCKY_BOX_PRIZES, key=lambda p: p["weight"], reverse=True)
+    odds_lines = "\n".join(f"🔹 **{p['name']}** — نسبة الحصول عليها: `{p['weight']}%`" for p in sorted_prizes)
+
+    if buyer is not None:
+        description = (
+            f"أهلاً بك {buyer.mention} 👋\n\n"
+            f"**هذه قائمة كل الجوائز المتاحة داخل صندوق الحظ ونسبة كل واحدة منها:**"
+        )
+    else:
+        description = "**هذه قائمة كل الجوائز المتاحة داخل صندوق الحظ ونسبة كل واحدة منها:**"
+
+    embed = discord.Embed(
+        title="🎁 محتويات صندوق الحظ",
+        description=description,
+        color=discord.Color.gold()
+    )
+    embed.add_field(name="🎯 الجوائز والنسب", value=odds_lines, inline=False)
+    embed.add_field(
+        name="ℹ️ ملاحظة",
+        value="النسب أعلاه ثابتة ولا تتغير، ويتم اختيار الجائزة بشكل عشوائي بالكامل عند فتح الصندوق.",
+        inline=False
+    )
+    if buyer is not None:
+        embed.set_thumbnail(url=buyer.display_avatar.url)
+    embed.set_footer(text=f"{guild.name} • Axion Store", icon_url=guild.icon.url if guild.icon else None)
+    embed.timestamp = discord.utils.utcnow()
+    return embed
+
+
+@bot.command(name="luckyinfo")
+async def luckyinfo_command(ctx: commands.Context, buyer: discord.Member = None):
+    """
+    الاستخدام:
+    +luckyinfo <@المشتري>  -> يرسل شرح مفصل بكل جوائز صندوق الحظ ونسبها، مع منشن المشتري
+    +luckyinfo              -> يرسل نفس الشرح بدون تخصيص لأحد
+    """
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+
+    embed = build_luckybox_catalog_embed(ctx.guild, buyer)
+    if buyer is not None:
+        await ctx.send(content=buyer.mention, embed=embed)
+    else:
+        await ctx.send(embed=embed)
 
 
 # =========================================================
