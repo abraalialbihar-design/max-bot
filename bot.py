@@ -109,7 +109,7 @@ TICKET_CATEGORIES = [
         "desc": "لو تبي تشتري فيزا افتراضية او تستفسر عنها اضغط علي",
     },
     {
-        "key": "luckybox", "label": "صندوق الحظ",
+        "key": "luckybox", "label": "Lucky Box",
         "emoji": "🎁", "prefix": "LUCKY", "needs_username": False,
         "desc": "لو تبي تشتري صندوق حظ او تستفسر عن جوائزه اضغط علي",
     },
