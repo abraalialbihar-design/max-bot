@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN") or os.getenv("BOT_TOKEN")
-SOLD_WEBHOOK_URL = os.getenv("SOLD_WEBHOOK_URL", "")
+SOLD_WEBHOOK_URL = os.getenv("SOLD_WEBHOOK_URL", "https://discord.com/api/webhooks/1532055087625666780/9PFSY6jSK34UmGPDG3GjSZXxJIevTfLYEJ67WJAHT1qygnZYMKsEhcLmIGrD8i1wL-El")
 # مسار التخزين الدائم: Railway يضبط RAILWAY_VOLUME_MOUNT_PATH تلقائياً فقط إذا قمت
 # بربط Volume بالخدمة من لوحة تحكم Railway. بدون Volume، أي ملف محلي يُمسح بالكامل
 # عند كل إعادة تشغيل/نشر لأن القرص نفسه مؤقت (ephemeral). راجع تعليمات الإعداد بالأسفل.
