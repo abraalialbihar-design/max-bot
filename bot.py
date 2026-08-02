@@ -717,7 +717,7 @@ class ServiceTicketSelect(discord.ui.Select):
             for category in TICKET_CATEGORIES
         ]
         super().__init__(
-            placeholder="اختر نوع طلبك من هنا...",
+            placeholder="اختار القسم المناسب لطلبك من هنا...",
             min_values=1,
             max_values=1,
             options=options,
@@ -1591,13 +1591,13 @@ async def pay_command(ctx: commands.Context):
     await ctx.send(embed=embed, view=PayCopyView(payments))
 
 
+TICKET_PANEL_TITLE = "◆ SUPPORT CENTER | Axion Store"
 TICKET_PANEL_DESCRIPTION = (
-    "قسـم الـتذاكر الخـاص بنـا <:ticket_white:1533473399412621433>\n\n"
-    "**شـرح كيفيـة فتـح تـذكرة** <a:OWNER:1530380061595795526> **:**\n"
-    "**1 -** اضغط على الكلـمة فل اسفـل : ( اختر نوع طلبك من هنا )\n"
-    "**2 -** اختـر الفئة واضغط عليـها\n"
-    "ثم سيـتم فتـح تذكـرة تلقـائيا <a:MR6_Up:1530379283342819490>"
+    "**مرحباً بك في مركز فتح التذاكر الموحد لـ Axion Store!**\n\n"
+    "> 💡 يرجى اختيار القسم المناسب لطلبك من القائمة أدناه ليتم خدمتك فوراً."
 )
+TICKET_PANEL_COLOR = discord.Color.from_rgb(255, 140, 0)
+TICKET_PANEL_FOOTER = "Axion Store ✦ Orange Edition"
 
 
 @bot.command(name="panel")
@@ -1608,13 +1608,11 @@ async def panel_command(ctx: commands.Context):
         pass
 
     embed = discord.Embed(
-        title="🎫 مركز الطلبات والاستفسارات - 𝐀𝐱𝐢𝐨𝐧 𝐒𝐭𝐨𝐫𝐞",
+        title=TICKET_PANEL_TITLE,
         description=TICKET_PANEL_DESCRIPTION,
-        color=TICKET_EMBED_COLOR
+        color=TICKET_PANEL_COLOR
     )
-    if ctx.guild.icon:
-        embed.set_thumbnail(url=ctx.guild.icon.url)
-    embed.set_footer(text="Axion Store • DEV BY : @D0JW")
+    embed.set_footer(text=TICKET_PANEL_FOOTER, icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
     embed.timestamp = discord.utils.utcnow()
 
     image_file = None
@@ -1639,13 +1637,11 @@ async def dpanel_command(ctx: commands.Context):
         pass
 
     embed = discord.Embed(
-        title="🎫 مركز الطلبات والاستفسارات - 𝐀𝐱𝐢𝐨𝐧 𝐒𝐭𝐨𝐫𝐞",
+        title=TICKET_PANEL_TITLE,
         description=TICKET_PANEL_DESCRIPTION,
-        color=TICKET_EMBED_COLOR
+        color=TICKET_PANEL_COLOR
     )
-    if ctx.guild.icon:
-        embed.set_thumbnail(url=ctx.guild.icon.url)
-    embed.set_footer(text="Axion Store • DEV BY : @D0JW")
+    embed.set_footer(text=TICKET_PANEL_FOOTER, icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
     embed.timestamp = discord.utils.utcnow()
 
     image_file = None
