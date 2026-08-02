@@ -1591,13 +1591,18 @@ async def pay_command(ctx: commands.Context):
     await ctx.send(embed=embed, view=PayCopyView(payments))
 
 
-TICKET_PANEL_TITLE = "◆ SUPPORT CENTER | Axion Store"
+TICKET_PANEL_TITLE = "🎫 مركز الطلبات والاستفسارات - 𝐀𝐱𝐢𝐨𝐧 𝐒𝐭𝐨𝐫𝐞"
 TICKET_PANEL_DESCRIPTION = (
-    "**مرحباً بك في مركز فتح التذاكر الموحد لـ Axion Store!**\n\n"
-    "> 💡 يرجى اختيار القسم المناسب لطلبك من القائمة أدناه ليتم خدمتك فوراً."
+    "قسـم الـتذاكر الخـاص بنـا <:ticket_white:1533473399412621433>\n\n"
+    "**شـرح كيفيـة فتـح تـذكرة** <a:OWNER:1530380061595795526> **:**\n"
+    "**1 -** اضغط على الكلـمة فل اسفـل : ( اختر نوع طلبك من هنا )\n"
+    "**2 -** اختـر الفئة واضغط عليـها\n"
+    "ثم سيـتم فتـح تذكـرة تلقـائيا <a:MR6_Up:1530379283342819490>"
 )
-TICKET_PANEL_COLOR = discord.Color.from_rgb(255, 140, 0)
-TICKET_PANEL_FOOTER = "Axion Store ✦ Orange Edition"
+TICKET_PANEL_COLOR = TICKET_EMBED_COLOR
+TICKET_PANEL_FOOTER = "Axion Store • DEV BY : @D0JW"
+# رابط الصورة الافتراضي الذي يظهر أسفل الإيمبد إن لم يتم إرفاق صورة مع الأمر
+TICKET_PANEL_DEFAULT_IMAGE_URL = "https://media.discordapp.net/attachments/1531472586746106017/1533472397447925812/image.png?ex=6a709cf6&is=6a6f4b76&hm=986ebc9526d5e5c1a0d93870c9e32e148d5cf4f3a702bd87c5969601f69c1d67&=&format=webp&quality=lossless&width=1139&height=385"
 
 
 @bot.command(name="panel")
@@ -1622,6 +1627,9 @@ async def panel_command(ctx: commands.Context):
             image_file = discord.File(io.BytesIO(img_bytes), filename=attachment.filename)
             embed.set_image(url=f"attachment://{attachment.filename}")
             break
+
+    if not image_file and TICKET_PANEL_DEFAULT_IMAGE_URL:
+        embed.set_image(url=TICKET_PANEL_DEFAULT_IMAGE_URL)
 
     if image_file:
         await ctx.send(embed=embed, file=image_file, view=TicketSetupView())
@@ -1651,6 +1659,9 @@ async def dpanel_command(ctx: commands.Context):
             image_file = discord.File(io.BytesIO(img_bytes), filename=attachment.filename)
             embed.set_image(url=f"attachment://{attachment.filename}")
             break
+
+    if not image_file and TICKET_PANEL_DEFAULT_IMAGE_URL:
+        embed.set_image(url=TICKET_PANEL_DEFAULT_IMAGE_URL)
 
     if image_file:
         await ctx.send(embed=embed, file=image_file, view=TicketSelectView())
