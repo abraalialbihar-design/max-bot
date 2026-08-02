@@ -4,6 +4,7 @@ import io
 import json
 import math
 import random
+import typing
 import asyncio
 import aiohttp
 import discord
@@ -22,6 +23,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
 SALES_COUNTER_FILE = os.path.join(DATA_DIR, "sales_counter.json")
+LUCKYBOX_LEADERBOARD_FILE = os.path.join(DATA_DIR, "luckybox_leaderboard.json")
 
 # ==== الإعدادات الأساسية ====
 DEFAULT_WELCOME_CHANNEL_ID = 1524371159020343318
@@ -277,6 +279,30 @@ def save_sales_counter(count: int):
 
 
 sales_counter = load_sales_counter()
+
+
+# =========================================================
+# ============ تخزين Leaderboard صندوق الحظ ============
+# =========================================================
+# نحفظ كل فوز (user_id + الجائزة + الشهر) لكل سيرفر على حدة، حتى نقدر نستخرج
+# لاحقاً "أعلى جائزة هالشهر" لكل عضو عبر أمر +luckyboard.
+
+def load_luckybox_leaderboard():
+    data = _load_json_with_backup(LUCKYBOX_LEADERBOARD_FILE)
+    if data is not None:
+        return data
+    return {}
+
+
+def save_luckybox_leaderboard(data: dict):
+    _atomic_write_json(LUCKYBOX_LEADERBOARD_FILE, data)
+
+
+luckybox_leaderboard = load_luckybox_leaderboard()
+
+
+def current_month_key() -> str:
+    return discord.utils.utcnow().strftime("%Y-%m")
 
 
 def parse_amount(text: str):
@@ -968,6 +994,16 @@ async def claim_cmd(ctx: commands.Context):
     await ctx.send(embed=embed)
 
 
+@bot.command(name="d")
+async def quick_done_command(ctx: commands.Context):
+    """يرسل رسالة سريعة لسؤال العميل هل يحتاج شيء آخر أو إغلاق التذكرة."""
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+    await ctx.send("هل تحتـاج شـيء اخـر او اغـلـق التـذكـرة ✅🛠️")
+
+
 @bot.command(name="addto")
 async def addto_command(ctx: commands.Context, member: discord.Member):
     if not is_ticket_channel(ctx.channel):
@@ -1302,7 +1338,8 @@ async def help_command(ctx: commands.Context):
             "`+stats` • إحصائيات المتجر والتذاكر\n"
             "`+invites [@عضو]` • عدد الدعوات، المغادرين، والدعوات الوهمية\n"
             "`+transcript` • تصدير رسائل التذكرة الحالية فقط (بدون إيموجيات) كملف نصي\n"
-            "`+away [سبب/off]` • تفعيل أو إلغاء وضع الغياب"
+            "`+away [سبب/off]` • تفعيل أو إلغاء وضع الغياب\n"
+            "`+d` • إرسال رسالة سريعة: هل تحتاج شيء آخر أو إغلاق التذكرة"
         ),
         inline=False
     )
@@ -1339,9 +1376,10 @@ async def help_command(ctx: commands.Context):
     embed.add_field(
         name="🎁 Lucky Box",
         value=(
-            "`+luckybox <@العضو>` • صندوق حظ مخصص لعضو معيّن فقط\n"
-            "`+luckybox` (بدون منشن) • صندوق حظ عام، أول من يضغط الزر يفوز\n"
-            "`+luckyinfo [@المشتري]` • إرسال شرح بكل جوائز صندوق الحظ ونسبها"
+            "`+luckybox <@العضو> [عدد المرات]` • صندوق حظ مخصص لعضو معيّن، يمكنه فتحه العدد المحدد من المرات (افتراضي مرة واحدة)\n"
+            "`+luckybox [عدد المرات]` • صندوق حظ عام، أول (عدد المرات) أشخاص يفوز كل واحد منهم بجائزة\n"
+            "`+luckyinfo [@المشتري]` • إرسال شرح بكل جوائز صندوق الحظ ونسبها\n"
+            "`+luckyboard` • Leaderboard صندوق الحظ (من حصل على أعلى/أندر جائزة هذا الشهر)"
         ),
         inline=False
     )
@@ -1825,27 +1863,58 @@ LUCKY_BOX_PRIZES = [
     {"name": "1B Credit", "weight": 0.5},
 ]
 
+# ترتيب قيمة الجوائز حسب موقعها بالقائمة أعلاه (الأندر = index أكبر = قيمة/ثمن أعلى).
+# يُستخدم لتحديد "أعلى جائزة" في الـ Leaderboard الشهري.
+PRIZE_RANK = {p["name"]: idx for idx, p in enumerate(LUCKY_BOX_PRIZES)}
+
 
 def draw_lucky_box_prize() -> dict:
     weights = [p["weight"] for p in LUCKY_BOX_PRIZES]
     return random.choices(LUCKY_BOX_PRIZES, weights=weights, k=1)[0]
 
 
-def build_luckybox_intro_embed(guild: discord.Guild, gifter: discord.abc.User, recipient: discord.Member = None) -> discord.Embed:
+def record_luckybox_win(guild_id: int, user_id: int, prize: dict):
+    """يسجل فوز صندوق حظ في ملف الـ Leaderboard الشهري (لكل سيرفر على حدة)."""
+    month_key = current_month_key()
+    guild_data = luckybox_leaderboard.setdefault(str(guild_id), {})
+    month_list = guild_data.setdefault(month_key, [])
+    month_list.append({
+        "user_id": user_id,
+        "prize": prize["name"],
+        "rank": PRIZE_RANK.get(prize["name"], 0),
+        "timestamp": discord.utils.utcnow().isoformat(),
+    })
+    save_luckybox_leaderboard(luckybox_leaderboard)
+
+
+def build_luckybox_intro_embed(guild: discord.Guild, gifter: discord.abc.User, recipient: discord.Member = None, max_opens: int = 1) -> discord.Embed:
     """الإيمبد الأولي: يعرض معلومات صندوق الحظ ونسب الجوائز قبل الفتح."""
     odds_lines = "\n".join(f"• **{p['name']}** — `{p['weight']}%`" for p in LUCKY_BOX_PRIZES)
 
     if recipient is not None:
-        description = (
-            f"{recipient.mention} **وصلك صندوق حظ من {gifter.mention}!**\n"
-            f"اضغط على الزر بالأسفل ⬇️ لفتحه ومعرفة جائزتك."
-        )
+        if max_opens > 1:
+            description = (
+                f"{recipient.mention} **وصلك صندوق حظ من {gifter.mention}!**\n"
+                f"يمكنك فتحه **{max_opens}** مرات، كل مرة تحصل على جائزة جديدة.\n"
+                f"اضغط على الزر بالأسفل ⬇️ لفتحه."
+            )
+        else:
+            description = (
+                f"{recipient.mention} **وصلك صندوق حظ من {gifter.mention}!**\n"
+                f"اضغط على الزر بالأسفل ⬇️ لفتحه ومعرفة جائزتك."
+            )
         thumbnail_url = recipient.display_avatar.url
     else:
-        description = (
-            f"**{gifter.mention} أرسل صندوق حظ عام لجميع الأعضاء! 🎉**\n"
-            f"أول شخص يضغط على الزر بالأسفل ⬇️ هو من يفوز بالجائزة، سارع قبل غيرك!"
-        )
+        if max_opens > 1:
+            description = (
+                f"**{gifter.mention} أرسل صندوق حظ عام لجميع الأعضاء! 🎉**\n"
+                f"أول **{max_opens}** أشخاص يضغطون على الزر بالأسفل ⬇️ هم من يفوزون، سارع قبل غيرك!"
+            )
+        else:
+            description = (
+                f"**{gifter.mention} أرسل صندوق حظ عام لجميع الأعضاء! 🎉**\n"
+                f"أول شخص يضغط على الزر بالأسفل ⬇️ هو من يفوز بالجائزة، سارع قبل غيرك!"
+            )
         thumbnail_url = gifter.display_avatar.url
 
     embed = discord.Embed(title="🎁 صندوق حظ جديد!", description=description, color=discord.Color.gold())
@@ -1855,6 +1924,8 @@ def build_luckybox_intro_embed(guild: discord.Guild, gifter: discord.abc.User, r
     else:
         embed.add_field(name="🌍 النوع", value="صندوق عام (لأي عضو)", inline=True)
     embed.add_field(name="🎁 مُهدى من", value=gifter.mention, inline=True)
+    if max_opens > 1:
+        embed.add_field(name="🔁 عدد مرات الفتح المتاحة", value=f"`{max_opens}`", inline=True)
     embed.set_thumbnail(url=thumbnail_url)
     embed.set_footer(text=f"{guild.name} • Axion Store", icon_url=guild.icon.url if guild.icon else None)
     embed.timestamp = discord.utils.utcnow()
@@ -1881,11 +1952,17 @@ def build_luckybox_result_embed(guild: discord.Guild, gifter: discord.abc.User, 
 
 
 class LuckyBoxView(discord.ui.View):
-    def __init__(self, gifter: discord.abc.User, recipient: discord.Member = None):
+    def __init__(self, gifter: discord.abc.User, recipient: discord.Member = None, max_opens: int = 1):
         super().__init__(timeout=None)
         self.gifter = gifter
         self.recipient = recipient  # None يعني صندوق عام يقدر يفتحه أي أحد
-        self.opened = False
+        self.max_opens = max(1, max_opens)
+        self.opens_used = 0
+        self.opened_by = set()  # لمنع نفس العضو من فتح الصندوق العام أكثر من مرة واحدة
+        self._lock = asyncio.Lock()  # للحماية من التسابق عند ضغط أكثر من شخص بنفس اللحظة
+
+    def _remaining(self) -> int:
+        return self.max_opens - self.opens_used
 
     @discord.ui.button(label="افتح الصندوق", emoji="🎁", style=discord.ButtonStyle.success, custom_id="open_luckybox_btn")
     async def open_box(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1894,20 +1971,34 @@ class LuckyBoxView(discord.ui.View):
             await interaction.response.send_message("❌ **هذا الصندوق ليس مخصصاً لك.**", ephemeral=True)
             return
 
-        # هذا الفحص والتعيين بدون أي await بينهما، فهو آمن من التسابق (race condition)
-        # حتى لو ضغط أكثر من شخص بنفس اللحظة على صندوق عام.
-        if self.opened:
-            await interaction.response.send_message("⚠️ **تم فتح هذا الصندوق بالفعل.**", ephemeral=True)
+        # في الصندوق العام: كل عضو له فرصة فتح واحدة فقط، حتى لو تبقّت فرص أخرى لأعضاء غيره
+        if self.recipient is None and interaction.user.id in self.opened_by:
+            await interaction.response.send_message("⚠️ **لقد فتحت هذا الصندوق مسبقاً.**", ephemeral=True)
             return
-        self.opened = True
+
+        async with self._lock:
+            if self._remaining() <= 0:
+                await interaction.response.send_message("⚠️ **تم استنفاد جميع فرص فتح هذا الصندوق.**", ephemeral=True)
+                return
+            self.opens_used += 1
+            self.opened_by.add(interaction.user.id)
+            remaining_after = self._remaining()
 
         winner = interaction.user
         prize = draw_lucky_box_prize()
 
-        button.disabled = True
-        button.label = "تم الفتح ✅"
+        try:
+            record_luckybox_win(interaction.guild.id, winner.id, prize)
+        except Exception as e:
+            print(f"⚠️ تعذر تسجيل فوز صندوق الحظ في الـ Leaderboard: {e}")
 
-        # نعطّل الزر على الرسالة الأصلية فقط، والنتيجة نرسلها كرسالة جديدة
+        if remaining_after <= 0:
+            button.disabled = True
+            button.label = "تم الفتح بالكامل ✅"
+        else:
+            button.label = f"افتح الصندوق ({remaining_after} متبقي)"
+
+        # نعطّل/نحدّث الزر على الرسالة الأصلية فقط، والنتيجة نرسلها كرسالة جديدة
         # ظاهرة للجميع في القناة/التذكرة (وليست خاصة بالفاتح فقط).
         await interaction.response.edit_message(view=self)
 
@@ -1919,19 +2010,23 @@ class LuckyBoxView(discord.ui.View):
 
 
 @bot.command(name="luckybox")
-async def luckybox_command(ctx: commands.Context, recipient: discord.Member = None):
+async def luckybox_command(ctx: commands.Context, recipient: typing.Optional[discord.Member] = None, opens: int = 1):
     """
     الاستخدام:
-    +luckybox <@العضو>  -> صندوق حظ مخصص لهذا العضو فقط
-    +luckybox            -> صندوق حظ عام، أول من يضغط الزر يفوز
+    +luckybox <@العضو> <عدد المرات>  -> صندوق حظ مخصص لهذا العضو، يقدر يفتحه العدد المحدد من المرات
+    +luckybox <@العضو>               -> صندوق حظ مخصص لهذا العضو، فتحة واحدة فقط
+    +luckybox <عدد المرات>            -> صندوق حظ عام، أول (عدد المرات) أشخاص يفوز كل واحد منهم بجائزة
+    +luckybox                        -> صندوق حظ عام، أول من يضغط الزر يفوز
     """
     try:
         await ctx.message.delete()
     except Exception:
         pass
 
-    embed = build_luckybox_intro_embed(ctx.guild, ctx.author, recipient)
-    view = LuckyBoxView(gifter=ctx.author, recipient=recipient)
+    opens = max(1, min(opens, 50))  # حد أقصى معقول لعدد مرات الفتح حتى لا يُساء استخدامه بالخطأ
+
+    embed = build_luckybox_intro_embed(ctx.guild, ctx.author, recipient, opens)
+    view = LuckyBoxView(gifter=ctx.author, recipient=recipient, max_opens=opens)
     if recipient is not None:
         await ctx.send(content=recipient.mention, embed=embed, view=view)
     else:
@@ -1986,6 +2081,52 @@ async def luckyinfo_command(ctx: commands.Context, buyer: discord.Member = None)
         await ctx.send(content=buyer.mention, embed=embed)
     else:
         await ctx.send(embed=embed)
+
+
+@bot.command(name="luckyboard", aliases=["luckyleaderboard", "luckytop"])
+async def luckyboard_command(ctx: commands.Context):
+    """
+    يعرض Leaderboard صندوق الحظ الخاص بالشهر الحالي: من حصل على أعلى/أندر جائزة.
+    الترتيب يعتمد أولاً على قيمة/ندرة أعلى جائزة حصل عليها العضو هذا الشهر، ثم عدد مرات فتحه للصندوق.
+    """
+    month_key = current_month_key()
+    guild_data = luckybox_leaderboard.get(str(ctx.guild.id), {})
+    month_list = guild_data.get(month_key, [])
+
+    if not month_list:
+        await ctx.reply(
+            embed=discord.Embed(description="📭 **لا توجد أي فتحات صندوق حظ مسجلة لهذا الشهر بعد.**", color=discord.Color.orange()),
+            mention_author=False
+        )
+        return
+
+    best_per_user = {}
+    counts = {}
+    for entry in month_list:
+        uid = entry["user_id"]
+        counts[uid] = counts.get(uid, 0) + 1
+        if uid not in best_per_user or entry["rank"] > best_per_user[uid]["rank"]:
+            best_per_user[uid] = entry
+
+    ranking = sorted(best_per_user.values(), key=lambda e: (e["rank"], counts.get(e["user_id"], 0)), reverse=True)
+    ranking = ranking[:10]
+
+    medals = ["🥇", "🥈", "🥉"]
+    lines = []
+    for i, entry in enumerate(ranking):
+        member = ctx.guild.get_member(entry["user_id"])
+        name = member.mention if member else f"`{entry['user_id']}`"
+        medal = medals[i] if i < 3 else f"`#{i + 1}`"
+        lines.append(f"{medal} {name} — 🏆 **{entry['prize']}** (عدد الفتحات هذا الشهر: `{counts.get(entry['user_id'], 0)}`)")
+
+    embed = discord.Embed(
+        title="🏆 Leaderboard صندوق الحظ - أعلى الجوائز هذا الشهر",
+        description="\n".join(lines),
+        color=discord.Color.gold()
+    )
+    embed.set_footer(text=f"{ctx.guild.name} • الشهر: {month_key}", icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
+    embed.timestamp = discord.utils.utcnow()
+    await ctx.reply(embed=embed, mention_author=False)
 
 
 # =========================================================
