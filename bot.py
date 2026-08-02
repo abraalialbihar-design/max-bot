@@ -23,7 +23,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
 SALES_COUNTER_FILE = os.path.join(DATA_DIR, "sales_counter.json")
-LUCKYBOX_LEADERBOARD_FILE = os.path.join(DATA_DIR, "luckybox_leaderboard.json")
+LUCKYBOX_STATS_FILE = os.path.join(DATA_DIR, "luckybox_stats.json")
 
 # ==== الإعدادات الأساسية ====
 DEFAULT_WELCOME_CHANNEL_ID = 1524371159020343318
@@ -133,10 +133,6 @@ def is_ticket_channel(channel) -> bool:
 # =========================================================
 # ============= تخزين آمن (بدون فقدان بيانات) =============
 # =========================================================
-# نستخدم كتابة ذرية (temp file + os.replace) بالإضافة إلى نسخة احتياطية .bak
-# حتى لو انقطع البوت أو تم إيقافه بالقوة أثناء الكتابة، لن يتلف الملف الأصلي
-# ولن تُفقد آخر نسخة سليمة من البيانات.
-
 def _atomic_write_json(path: str, data: dict):
     tmp_path = f"{path}.tmp"
     try:
@@ -144,7 +140,7 @@ def _atomic_write_json(path: str, data: dict):
             json.dump(data, f, ensure_ascii=False, indent=2)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp_path, path)  # عملية ذرية على مستوى نظام الملفات
+        os.replace(tmp_path, path)
     except Exception as e:
         print(f"❌ خطأ أثناء الكتابة الآمنة إلى {path}: {e}")
         try:
@@ -154,7 +150,6 @@ def _atomic_write_json(path: str, data: dict):
             pass
         return
 
-    # نسخة احتياطية إضافية (لا توقف البرنامج إذا فشلت)
     try:
         with open(f"{path}.bak", "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -163,7 +158,6 @@ def _atomic_write_json(path: str, data: dict):
 
 
 def _load_json_with_backup(path: str):
-    """يحاول تحميل الملف الأساسي، وإن كان تالفاً/مفقوداً يلجأ للنسخة الاحتياطية."""
     for candidate, is_backup in ((path, False), (f"{path}.bak", True)):
         if not os.path.exists(candidate):
             continue
@@ -248,7 +242,6 @@ if "away_notified_channels" not in config:
 if _config_dirty:
     save_config(config)
 
-# نستعيد قنوات "الغياب" التي تم إشعارها قبل آخر إعادة تشغيل حتى لا يتكرر الإشعار
 away_notified_channels = set(config.get("away_notified_channels", []))
 
 
@@ -282,27 +275,40 @@ sales_counter = load_sales_counter()
 
 
 # =========================================================
-# ============ تخزين Leaderboard صندوق الحظ ============
+# ============= إحصائيات صندوق الحظ (Leaderboard) =========
 # =========================================================
-# نحفظ كل فوز (user_id + الجائزة + الشهر) لكل سيرفر على حدة، حتى نقدر نستخرج
-# لاحقاً "أعلى جائزة هالشهر" لكل عضو عبر أمر +luckyboard.
-
-def load_luckybox_leaderboard():
-    data = _load_json_with_backup(LUCKYBOX_LEADERBOARD_FILE)
-    if data is not None:
-        return data
-    return {}
+def load_luckybox_stats():
+    data = _load_json_with_backup(LUCKYBOX_STATS_FILE)
+    return data if data is not None else {}
 
 
-def save_luckybox_leaderboard(data: dict):
-    _atomic_write_json(LUCKYBOX_LEADERBOARD_FILE, data)
+def save_luckybox_stats(data):
+    _atomic_write_json(LUCKYBOX_STATS_FILE, data)
 
 
-luckybox_leaderboard = load_luckybox_leaderboard()
+luckybox_stats = load_luckybox_stats()
 
 
-def current_month_key() -> str:
+def _current_month_key() -> str:
     return discord.utils.utcnow().strftime("%Y-%m")
+
+
+def record_luckybox_win(user: discord.abc.User, prize: dict):
+    """يسجل فوز عضو بجائزة من صندوق الحظ ضمن إحصائية الشهر الحالي."""
+    month_key = _current_month_key()
+    month_data = luckybox_stats.setdefault(month_key, {})
+    user_data = month_data.setdefault(str(user.id), {
+        "count": 0,
+        "best_prize": None,
+        "best_weight": None,
+        "username": str(user),
+    })
+    user_data["count"] += 1
+    user_data["username"] = str(user)
+    if user_data["best_weight"] is None or prize["weight"] < user_data["best_weight"]:
+        user_data["best_prize"] = prize["name"]
+        user_data["best_weight"] = prize["weight"]
+    save_luckybox_stats(luckybox_stats)
 
 
 def parse_amount(text: str):
@@ -381,7 +387,6 @@ async def ask_confirmation(ctx_or_interaction, description: str, on_confirm, aut
 
 
 async def generate_ticket_transcript(channel: discord.TextChannel) -> discord.File:
-    """يجمع كل رسائل التذكرة في ملف txt واحد."""
     lines = [
         f"سجل محادثة التذكرة: #{channel.name}",
         f"آيدي القناة: {channel.id}",
@@ -424,19 +429,14 @@ EMOJI_PATTERN = re.compile(
 
 
 def strip_emojis(text: str) -> str:
-    """يزيل الإيموجيات اليونيكود (والفاصل الاختياري) من النص."""
     if not text:
         return text
     cleaned = EMOJI_PATTERN.sub("", text)
-    cleaned = re.sub(r"<a?:\w+:\d+>", "", cleaned)  # إيموجيات الديسكورد المخصصة
+    cleaned = re.sub(r"<a?:\w+:\d+>", "", cleaned)
     return re.sub(r"[ \t]+", " ", cleaned).strip()
 
 
 async def generate_messages_only_transcript(channel: discord.TextChannel) -> discord.File:
-    """
-    ترانسكريبت يحتوي على الرسائل النصية فقط (بدون إيموجيات، بدون مرفقات أو إيمبدات).
-    يُستخدم مع أمر +transcript.
-    """
     lines = []
     try:
         async for msg in channel.history(limit=None, oldest_first=True):
@@ -455,7 +455,6 @@ async def generate_messages_only_transcript(channel: discord.TextChannel) -> dis
 
 
 async def log_ticket_transcript(channel: discord.TextChannel, closed_by: discord.abc.User):
-    """يرسل ملف اللوق الكامل للتذكرة إلى روم اللوقات المخصص."""
     log_channel = channel.guild.get_channel(TICKET_LOG_CHANNEL_ID)
     if log_channel is None:
         print("⚠️ لم يتم العثور على قناة لوق التذاكر المحددة.")
@@ -479,7 +478,6 @@ async def log_ticket_transcript(channel: discord.TextChannel, closed_by: discord
 
 
 async def close_and_delete_ticket(channel: discord.TextChannel, closer: discord.abc.User):
-    """منطق إغلاق وحذف التذكرة المشترك بين زر التحكم وأمر +close."""
     embed = discord.Embed(
         description="🔒 **تم إغلاق التذكرة، سيتم حذف القناة تلقائياً خلال 5 ثوانٍ...**",
         color=discord.Color.red()
@@ -543,7 +541,6 @@ class TicketControlView(discord.ui.View):
 
 
 async def create_service_ticket(interaction: discord.Interaction, category: dict, extra_info: str = None):
-    """ينشئ قناة تذكرة لقسم معين من TICKET_CATEGORIES."""
     guild = interaction.guild
     member = interaction.user
     prefix = category["prefix"]
@@ -798,7 +795,6 @@ async def on_ready():
         try:
             invites = await guild.invites()
             invites_cache[guild.id] = invites
-            # نأخذ لقطة أولية لعدد استخدامات كل رابط دعوة (تُستخدم لاحقاً لحساب مغادرة المدعوين)
             guild_snapshot = snapshot.setdefault(str(guild.id), {})
             for inv in invites:
                 guild_snapshot.setdefault(inv.code, {"uses": inv.uses, "joins": [], "leaves": 0})
@@ -827,7 +823,6 @@ async def on_member_join(member: discord.Member):
     except Exception:
         pass
 
-    # تسجيل عملية الانضمام مع رابط الدعوة المستخدم لأجل حساب المغادرين/الوهميين لاحقاً في +invites
     if invite_code:
         guild_snapshot = config.setdefault("invite_uses_snapshot", {}).setdefault(str(guild.id), {})
         entry = guild_snapshot.setdefault(invite_code, {"uses": 0, "joins": [], "leaves": 0})
@@ -859,7 +854,6 @@ async def on_member_join(member: discord.Member):
 
 @bot.event
 async def on_member_remove(member: discord.Member):
-    """يسجل مغادرة العضو مقابل رابط الدعوة الذي دخل به، لأجل إحصائية +invites (المغادرين)."""
     guild = member.guild
     guild_snapshot = config.setdefault("invite_uses_snapshot", {}).get(str(guild.id))
     if not guild_snapshot:
@@ -931,7 +925,6 @@ async def on_message(message: discord.Message):
 
 @bot.event
 async def on_guild_channel_delete(channel):
-    """تنظيف قنوات الغياب المحذوفة من الذاكرة والملف حتى لا تتراكم بلا داعٍ."""
     if channel.id in away_notified_channels:
         away_notified_channels.discard(channel.id)
         _persist_away_notified()
@@ -995,12 +988,10 @@ async def claim_cmd(ctx: commands.Context):
 
 
 @bot.command(name="d")
-async def quick_done_command(ctx: commands.Context):
-    """يرسل رسالة سريعة لسؤال العميل هل يحتاج شيء آخر أو إغلاق التذكرة."""
-    try:
-        await ctx.message.delete()
-    except Exception:
-        pass
+async def quick_anything_else(ctx: commands.Context):
+    """رسالة سريعة للاستفسار داخل التذكرة قبل الإغلاق."""
+    try: await ctx.message.delete()
+    except Exception: pass
     await ctx.send("هل تحتـاج شـيء اخـر او اغـلـق التـذكـرة ✅🛠️")
 
 
@@ -1054,8 +1045,6 @@ async def check_invites(ctx: commands.Context, member: discord.Member = None):
     except Exception:
         pass
 
-    # حساب المدعوين الذين غادروا السيرفر، والدعوات "الوهمية" (فاكة)
-    # وهمية = عضو دخل عبر رابط هذا الشخص وغادر خلال فترة قصيرة جداً (أقل من الحد الأدنى بالأيام)
     left_count = 0
     fake_count = 0
     real_count = 0
@@ -1110,7 +1099,6 @@ async def close_ticket_cmd(ctx: commands.Context):
 
 @bot.command(name="transcript")
 async def transcript_command(ctx: commands.Context):
-    """يصدّر رسائل التذكرة الحالية فقط (بدون إيموجيات، بدون مرفقات/إيمبدات) كملف نصي."""
     if not is_ticket_channel(ctx.channel):
         await ctx.reply(embed=discord.Embed(description="❌ **هذا الأمر يستخدم فقط داخل قنوات التذاكر.**", color=discord.Color.red()), mention_author=False)
         return
@@ -1339,7 +1327,7 @@ async def help_command(ctx: commands.Context):
             "`+invites [@عضو]` • عدد الدعوات، المغادرين، والدعوات الوهمية\n"
             "`+transcript` • تصدير رسائل التذكرة الحالية فقط (بدون إيموجيات) كملف نصي\n"
             "`+away [سبب/off]` • تفعيل أو إلغاء وضع الغياب\n"
-            "`+d` • إرسال رسالة سريعة: هل تحتاج شيء آخر أو إغلاق التذكرة"
+            "`+d` • إرسال رسالة سريعة (هل تحتاج شيء اخر او اغلق التذكرة)"
         ),
         inline=False
     )
@@ -1376,10 +1364,10 @@ async def help_command(ctx: commands.Context):
     embed.add_field(
         name="🎁 Lucky Box",
         value=(
-            "`+luckybox <@العضو> [عدد المرات]` • صندوق حظ مخصص لعضو معيّن، يمكنه فتحه العدد المحدد من المرات (افتراضي مرة واحدة)\n"
-            "`+luckybox [عدد المرات]` • صندوق حظ عام، أول (عدد المرات) أشخاص يفوز كل واحد منهم بجائزة\n"
+            "`+luckybox <@العضو> [عدد المرات]` • صندوق حظ مخصص لعضو معيّن، يمكنه فتحه بعدد المرات المحدد (افتراضي مرة واحدة)\n"
+            "`+luckybox [عدد المرات]` • صندوق حظ عام، أول عدد من الأعضاء يضغطون الزر يفوز كل واحد بجائزته\n"
             "`+luckyinfo [@المشتري]` • إرسال شرح بكل جوائز صندوق الحظ ونسبها\n"
-            "`+luckyboard` • Leaderboard صندوق الحظ (من حصل على أعلى/أندر جائزة هذا الشهر)"
+            "`+luckytop [شهر YYYY-MM]` • لوحة صدارة أفضل الفائزين في صندوق الحظ (افتراضياً الشهر الحالي)"
         ),
         inline=False
     )
@@ -1535,7 +1523,6 @@ class SetPayView(discord.ui.View):
 
 
 class PayCopyButton(discord.ui.Button):
-    """زر يرسل رسالة خاصة (ephemeral) تحتوي بيانات طريقة دفع واحدة داخل كود بلوك لتسهيل نسخها."""
     def __init__(self, display_name: str, value: str):
         super().__init__(
             label=f"نسخ {display_name}",
@@ -1604,6 +1591,15 @@ async def pay_command(ctx: commands.Context):
     await ctx.send(embed=embed, view=PayCopyView(payments))
 
 
+TICKET_PANEL_DESCRIPTION = (
+    "قسـم الـتذاكر الخـاص بنـا <:ticket_white:1533473399412621433>\n\n"
+    "**شـرح كيفيـة فتـح تـذكرة** <a:OWNER:1530380061595795526> **:**\n"
+    "**1 -** اضغط على الكلـمة فل اسفـل : ( اختر نوع طلبك من هنا )\n"
+    "**2 -** اختـر الفئة واضغط عليـها\n"
+    "ثم سيـتم فتـح تذكـرة تلقـائيا <a:MR6_Up:1530379283342819490>"
+)
+
+
 @bot.command(name="panel")
 async def panel_command(ctx: commands.Context):
     try:
@@ -1611,18 +1607,9 @@ async def panel_command(ctx: commands.Context):
     except Exception:
         pass
 
-    categories_lines = "\n\n".join(
-        f"{cat['emoji']} **{cat['label']}**\n{cat['desc']}" for cat in TICKET_CATEGORIES
-    )
-
     embed = discord.Embed(
         title="🎫 مركز الطلبات والاستفسارات - 𝐀𝐱𝐢𝐨𝐧 𝐒𝐭𝐨𝐫𝐞",
-        description=(
-            "**أهلاً بك في متجر Axion Store! 👋**\n"
-            "اختر القسم المناسب لطلبك من الأزرار بالأسفل وسيتم فتح تذكرة خاصة بك فوراً.\n\n"
-            f"{categories_lines}\n\n"
-            "**⚠️ ملاحظة: يحق لك فتح تذكرة واحدة فقط في نفس الوقت.**"
-        ),
+        description=TICKET_PANEL_DESCRIPTION,
         color=TICKET_EMBED_COLOR
     )
     if ctx.guild.icon:
@@ -1630,7 +1617,18 @@ async def panel_command(ctx: commands.Context):
     embed.set_footer(text="Axion Store • DEV BY : @D0JW")
     embed.timestamp = discord.utils.utcnow()
 
-    await ctx.send(embed=embed, view=TicketSetupView())
+    image_file = None
+    for attachment in ctx.message.attachments:
+        if attachment.content_type and attachment.content_type.startswith("image/"):
+            img_bytes = await attachment.read()
+            image_file = discord.File(io.BytesIO(img_bytes), filename=attachment.filename)
+            embed.set_image(url=f"attachment://{attachment.filename}")
+            break
+
+    if image_file:
+        await ctx.send(embed=embed, file=image_file, view=TicketSetupView())
+    else:
+        await ctx.send(embed=embed, view=TicketSetupView())
 
 
 @bot.command(name="dpanel")
@@ -1640,18 +1638,9 @@ async def dpanel_command(ctx: commands.Context):
     except Exception:
         pass
 
-    categories_lines = "\n\n".join(
-        f"{cat['emoji']} **{cat['label']}**\n{cat['desc']}" for cat in TICKET_CATEGORIES
-    )
-
     embed = discord.Embed(
         title="🎫 مركز الطلبات والاستفسارات - 𝐀𝐱𝐢𝐨𝐧 𝐒𝐭𝐨𝐫𝐞",
-        description=(
-            "**أهلاً بك في متجر Axion Store! 👋**\n\n"
-            f"{categories_lines}\n\n"
-            "**📥 اختر نوع طلبك من القائمة أدناه وسيتم فتح تذكرة خاصة بك فوراً.**\n"
-            "**⚠️ ملاحظة: يحق لك فتح تذكرة واحدة فقط في نفس الوقت.**"
-        ),
+        description=TICKET_PANEL_DESCRIPTION,
         color=TICKET_EMBED_COLOR
     )
     if ctx.guild.icon:
@@ -1659,7 +1648,18 @@ async def dpanel_command(ctx: commands.Context):
     embed.set_footer(text="Axion Store • DEV BY : @D0JW")
     embed.timestamp = discord.utils.utcnow()
 
-    await ctx.send(embed=embed, view=TicketSelectView())
+    image_file = None
+    for attachment in ctx.message.attachments:
+        if attachment.content_type and attachment.content_type.startswith("image/"):
+            img_bytes = await attachment.read()
+            image_file = discord.File(io.BytesIO(img_bytes), filename=attachment.filename)
+            embed.set_image(url=f"attachment://{attachment.filename}")
+            break
+
+    if image_file:
+        await ctx.send(embed=embed, file=image_file, view=TicketSelectView())
+    else:
+        await ctx.send(embed=embed, view=TicketSelectView())
 
 
 # =========================================================
@@ -1707,8 +1707,6 @@ class RateModal(discord.ui.Modal, title="تقييم الخدمة"):
         else:
             await interaction.response.send_message("⚠️ **لم يتم العثور على قناة التقييمات.**", ephemeral=True)
 
-        # نعطّل الزر ونحدّث تسميته على الرسالة الأصلية مباشرة (بدل الاعتماد على
-        # interaction.message الذي قد لا يكون متوفراً في بعض حالات المودال)
         self.rate_view.rate_button.disabled = True
         self.rate_view.rate_button.label = "تم التقييم بنجاح ✅"
         target_message = self.rate_view.message or interaction.message
@@ -1725,7 +1723,7 @@ class RateView(discord.ui.View):
         self.seller = seller
         self.buyer = buyer
         self.product = product
-        self.message = None  # يُضبط بعد إرسال الرسالة حتى يمكن تعديلها لاحقاً بأمان
+        self.message = None
 
     @discord.ui.button(label="⭐ قيّم تجربتك الآن", style=discord.ButtonStyle.success, emoji="🌟")
     async def rate_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1736,7 +1734,6 @@ class RateView(discord.ui.View):
 
 
 def build_rate_request_embed(guild: discord.Guild, buyer: discord.Member, seller: discord.Member, product: str) -> discord.Embed:
-    """رسالة طلب التقييم التي تصل للمشتري (مختلفة عن الرسالة التي تُنشر في روم التقييمات)."""
     embed = discord.Embed(
         title="🌟 شاركنا رأيك في تجربتك معنا!",
         description=(
@@ -1760,7 +1757,6 @@ def build_rate_request_embed(guild: discord.Guild, buyer: discord.Member, seller
 
 
 async def send_rate_request(ctx: commands.Context, seller: discord.Member, buyer: discord.Member, product: str):
-    """يبني ويرسل طلب التقييم، ويربط الرسالة بالـ View حتى يعمل تعديل الزر لاحقاً بشكل موثوق."""
     view = RateView(seller=seller, buyer=buyer, product=product)
     embed = build_rate_request_embed(ctx.guild, buyer, seller, product)
     sent_message = await ctx.send(content=buyer.mention, embed=embed, view=view)
@@ -1783,11 +1779,6 @@ async def rate_prefix(ctx: commands.Context, buyer: discord.Member, *, product: 
 
 @bot.command(name="sold")
 async def sold_command(ctx: commands.Context, buyer: discord.Member, *, product: str):
-    """
-    الاستخدام: +sold @المشتري اسم المنتج
-    (المنشن أولاً، ثم اسم المنتج بعده - بدون الحاجة لعلامات اقتباس حتى لو كان أكثر من كلمة)
-    بعد تسجيل عملية البيع بنجاح، يرسل البوت تلقائياً طلب تقييم للمشتري.
-    """
     global sales_counter
 
     try:
@@ -1818,8 +1809,6 @@ async def sold_command(ctx: commands.Context, buyer: discord.Member, *, product:
     embed.set_footer(text=f"{ctx.guild.name} • تم التسجيل بواسطة {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
     embed.timestamp = discord.utils.utcnow()
 
-    # نرسل تأكيد عملية البيع دائماً في القناة الحالية (حتى لو تعذّر إرسال الويبهوك)
-    # حتى لا تضيع تفاصيل العملية.
     await ctx.send(embed=embed)
 
     webhook_sent = False
@@ -1842,7 +1831,6 @@ async def sold_command(ctx: commands.Context, buyer: discord.Member, *, product:
         status_text = f"⚠️ **تم تسجيل عملية البيع رقم `{order_number}` بنجاح هنا، لكن تعذر إرسال نسخة عبر الويبهوك.**"
     await ctx.send(embed=discord.Embed(description=status_text, color=discord.Color.green() if webhook_sent or not SOLD_WEBHOOK_URL else discord.Color.orange()))
 
-    # إرسال طلب تقييم تلقائي للمشتري مباشرة بعد تسجيل عملية البيع
     try:
         await send_rate_request(ctx, seller=ctx.author, buyer=buyer, product=product)
     except Exception as e:
@@ -1853,7 +1841,6 @@ async def sold_command(ctx: commands.Context, buyer: discord.Member, *, product:
 # =================== صندوق الحظ: +luckybox ===================
 # =========================================================
 
-# الترتيب من الأكثر شيوعاً (أعلى نسبة) إلى الأندر (أقل نسبة)، ومجموع النسب = 100%
 LUCKY_BOX_PRIZES = [
     {"name": "1M Credit", "weight": 60},
     {"name": "Hype Squad", "weight": 25},
@@ -1863,9 +1850,8 @@ LUCKY_BOX_PRIZES = [
     {"name": "1B Credit", "weight": 0.5},
 ]
 
-# ترتيب قيمة الجوائز حسب موقعها بالقائمة أعلاه (الأندر = index أكبر = قيمة/ثمن أعلى).
-# يُستخدم لتحديد "أعلى جائزة" في الـ Leaderboard الشهري.
-PRIZE_RANK = {p["name"]: idx for idx, p in enumerate(LUCKY_BOX_PRIZES)}
+# أقصى عدد مسموح لعدد مرات فتح الصندوق في أمر واحد، حتى لا يُساء استخدامه
+LUCKY_BOX_MAX_ATTEMPTS = 50
 
 
 def draw_lucky_box_prize() -> dict:
@@ -1873,30 +1859,14 @@ def draw_lucky_box_prize() -> dict:
     return random.choices(LUCKY_BOX_PRIZES, weights=weights, k=1)[0]
 
 
-def record_luckybox_win(guild_id: int, user_id: int, prize: dict):
-    """يسجل فوز صندوق حظ في ملف الـ Leaderboard الشهري (لكل سيرفر على حدة)."""
-    month_key = current_month_key()
-    guild_data = luckybox_leaderboard.setdefault(str(guild_id), {})
-    month_list = guild_data.setdefault(month_key, [])
-    month_list.append({
-        "user_id": user_id,
-        "prize": prize["name"],
-        "rank": PRIZE_RANK.get(prize["name"], 0),
-        "timestamp": discord.utils.utcnow().isoformat(),
-    })
-    save_luckybox_leaderboard(luckybox_leaderboard)
-
-
-def build_luckybox_intro_embed(guild: discord.Guild, gifter: discord.abc.User, recipient: discord.Member = None, max_opens: int = 1) -> discord.Embed:
-    """الإيمبد الأولي: يعرض معلومات صندوق الحظ ونسب الجوائز قبل الفتح."""
+def build_luckybox_intro_embed(guild: discord.Guild, gifter: discord.abc.User, recipient: discord.Member = None, max_attempts: int = 1) -> discord.Embed:
     odds_lines = "\n".join(f"• **{p['name']}** — `{p['weight']}%`" for p in LUCKY_BOX_PRIZES)
 
     if recipient is not None:
-        if max_opens > 1:
+        if max_attempts > 1:
             description = (
                 f"{recipient.mention} **وصلك صندوق حظ من {gifter.mention}!**\n"
-                f"يمكنك فتحه **{max_opens}** مرات، كل مرة تحصل على جائزة جديدة.\n"
-                f"اضغط على الزر بالأسفل ⬇️ لفتحه."
+                f"يمكنك فتحه **{max_attempts}** مرة، اضغط على الزر بالأسفل ⬇️ في كل مرة لسحب جائزة جديدة."
             )
         else:
             description = (
@@ -1905,10 +1875,10 @@ def build_luckybox_intro_embed(guild: discord.Guild, gifter: discord.abc.User, r
             )
         thumbnail_url = recipient.display_avatar.url
     else:
-        if max_opens > 1:
+        if max_attempts > 1:
             description = (
                 f"**{gifter.mention} أرسل صندوق حظ عام لجميع الأعضاء! 🎉**\n"
-                f"أول **{max_opens}** أشخاص يضغطون على الزر بالأسفل ⬇️ هم من يفوزون، سارع قبل غيرك!"
+                f"أول **{max_attempts}** أعضاء يضغطون الزر بالأسفل ⬇️ يفوز كل واحد منهم بجائزة، سارع قبل غيرك!"
             )
         else:
             description = (
@@ -1924,8 +1894,8 @@ def build_luckybox_intro_embed(guild: discord.Guild, gifter: discord.abc.User, r
     else:
         embed.add_field(name="🌍 النوع", value="صندوق عام (لأي عضو)", inline=True)
     embed.add_field(name="🎁 مُهدى من", value=gifter.mention, inline=True)
-    if max_opens > 1:
-        embed.add_field(name="🔁 عدد مرات الفتح المتاحة", value=f"`{max_opens}`", inline=True)
+    if max_attempts > 1:
+        embed.add_field(name="🔁 عدد الفتحات المتاحة", value=f"`{max_attempts}`", inline=True)
     embed.set_thumbnail(url=thumbnail_url)
     embed.set_footer(text=f"{guild.name} • Axion Store", icon_url=guild.icon.url if guild.icon else None)
     embed.timestamp = discord.utils.utcnow()
@@ -1933,7 +1903,6 @@ def build_luckybox_intro_embed(guild: discord.Guild, gifter: discord.abc.User, r
 
 
 def build_luckybox_result_embed(guild: discord.Guild, gifter: discord.abc.User, winner: discord.abc.User, prize: dict) -> discord.Embed:
-    """الإيمبد بعد الفتح: يعرض الجائزة الفائزة فقط."""
     odds_lines = "\n".join(f"• **{p['name']}** — `{p['weight']}%`" for p in LUCKY_BOX_PRIZES)
     embed = discord.Embed(
         title="🎉 تم فتح صندوق الحظ!",
@@ -1952,54 +1921,47 @@ def build_luckybox_result_embed(guild: discord.Guild, gifter: discord.abc.User, 
 
 
 class LuckyBoxView(discord.ui.View):
-    def __init__(self, gifter: discord.abc.User, recipient: discord.Member = None, max_opens: int = 1):
+    def __init__(self, gifter: discord.abc.User, recipient: discord.Member = None, max_attempts: int = 1):
         super().__init__(timeout=None)
         self.gifter = gifter
         self.recipient = recipient  # None يعني صندوق عام يقدر يفتحه أي أحد
-        self.max_opens = max(1, max_opens)
-        self.opens_used = 0
-        self.opened_by = set()  # لمنع نفس العضو من فتح الصندوق العام أكثر من مرة واحدة
-        self._lock = asyncio.Lock()  # للحماية من التسابق عند ضغط أكثر من شخص بنفس اللحظة
+        self.max_attempts = max(1, max_attempts)
+        self.opens_count = 0
+        self.opened_users = set()  # للصندوق العام: كل عضو يفتح مرة واحدة فقط
 
-    def _remaining(self) -> int:
-        return self.max_opens - self.opens_used
+        if self.max_attempts > 1:
+            self.open_box.label = f"افتح الصندوق ({self.max_attempts} متبقية)"
 
     @discord.ui.button(label="افتح الصندوق", emoji="🎁", style=discord.ButtonStyle.success, custom_id="open_luckybox_btn")
     async def open_box(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # لو الصندوق مخصص لعضو معيّن، لا يفتحه إلا هو
         if self.recipient is not None and interaction.user.id != self.recipient.id:
             await interaction.response.send_message("❌ **هذا الصندوق ليس مخصصاً لك.**", ephemeral=True)
             return
 
-        # في الصندوق العام: كل عضو له فرصة فتح واحدة فقط، حتى لو تبقّت فرص أخرى لأعضاء غيره
-        if self.recipient is None and interaction.user.id in self.opened_by:
+        if self.recipient is None and interaction.user.id in self.opened_users:
             await interaction.response.send_message("⚠️ **لقد فتحت هذا الصندوق مسبقاً.**", ephemeral=True)
             return
 
-        async with self._lock:
-            if self._remaining() <= 0:
-                await interaction.response.send_message("⚠️ **تم استنفاد جميع فرص فتح هذا الصندوق.**", ephemeral=True)
-                return
-            self.opens_used += 1
-            self.opened_by.add(interaction.user.id)
-            remaining_after = self._remaining()
+        # هذا الفحص والتعيين بدون أي await بينهما، فهو آمن من التسابق (race condition)
+        if self.opens_count >= self.max_attempts:
+            await interaction.response.send_message("⚠️ **تم استخدام كل المحاولات المتاحة لهذا الصندوق.**", ephemeral=True)
+            return
+
+        self.opens_count += 1
+        if self.recipient is None:
+            self.opened_users.add(interaction.user.id)
 
         winner = interaction.user
         prize = draw_lucky_box_prize()
+        record_luckybox_win(winner, prize)
 
-        try:
-            record_luckybox_win(interaction.guild.id, winner.id, prize)
-        except Exception as e:
-            print(f"⚠️ تعذر تسجيل فوز صندوق الحظ في الـ Leaderboard: {e}")
-
-        if remaining_after <= 0:
+        remaining = self.max_attempts - self.opens_count
+        if remaining <= 0:
             button.disabled = True
-            button.label = "تم الفتح بالكامل ✅"
+            button.label = "تم الفتح ✅"
         else:
-            button.label = f"افتح الصندوق ({remaining_after} متبقي)"
+            button.label = f"افتح الصندوق ({remaining} متبقية)"
 
-        # نعطّل/نحدّث الزر على الرسالة الأصلية فقط، والنتيجة نرسلها كرسالة جديدة
-        # ظاهرة للجميع في القناة/التذكرة (وليست خاصة بالفاتح فقط).
         await interaction.response.edit_message(view=self)
 
         result_embed = build_luckybox_result_embed(interaction.guild, self.gifter, winner, prize)
@@ -2010,23 +1972,21 @@ class LuckyBoxView(discord.ui.View):
 
 
 @bot.command(name="luckybox")
-async def luckybox_command(ctx: commands.Context, recipient: typing.Optional[discord.Member] = None, opens: int = 1):
+async def luckybox_command(ctx: commands.Context, recipient: typing.Optional[discord.Member] = None, attempts: int = 1):
     """
     الاستخدام:
-    +luckybox <@العضو> <عدد المرات>  -> صندوق حظ مخصص لهذا العضو، يقدر يفتحه العدد المحدد من المرات
-    +luckybox <@العضو>               -> صندوق حظ مخصص لهذا العضو، فتحة واحدة فقط
-    +luckybox <عدد المرات>            -> صندوق حظ عام، أول (عدد المرات) أشخاص يفوز كل واحد منهم بجائزة
-    +luckybox                        -> صندوق حظ عام، أول من يضغط الزر يفوز
+    +luckybox <@العضو> [عدد المرات]  -> صندوق حظ مخصص لهذا العضو، يفتحه بعدد المرات المحدد (افتراضي 1)
+    +luckybox [عدد المرات]            -> صندوق حظ عام، أول عدد من الأعضاء يضغطون الزر يفوز كل واحد بجائزته
     """
     try:
         await ctx.message.delete()
     except Exception:
         pass
 
-    opens = max(1, min(opens, 50))  # حد أقصى معقول لعدد مرات الفتح حتى لا يُساء استخدامه بالخطأ
+    attempts = max(1, min(attempts, LUCKY_BOX_MAX_ATTEMPTS))
 
-    embed = build_luckybox_intro_embed(ctx.guild, ctx.author, recipient, opens)
-    view = LuckyBoxView(gifter=ctx.author, recipient=recipient, max_opens=opens)
+    embed = build_luckybox_intro_embed(ctx.guild, ctx.author, recipient, attempts)
+    view = LuckyBoxView(gifter=ctx.author, recipient=recipient, max_attempts=attempts)
     if recipient is not None:
         await ctx.send(content=recipient.mention, embed=embed, view=view)
     else:
@@ -2034,7 +1994,6 @@ async def luckybox_command(ctx: commands.Context, recipient: typing.Optional[dis
 
 
 def build_luckybox_catalog_embed(guild: discord.Guild, buyer: discord.Member = None) -> discord.Embed:
-    """إيمبد شرح تفصيلي بكل الجوائز المتاحة داخل صندوق الحظ ونسبة كل جائزة."""
     sorted_prizes = sorted(LUCKY_BOX_PRIZES, key=lambda p: p["weight"], reverse=True)
     odds_lines = "\n".join(f"🔹 **{p['name']}** — نسبة الحصول عليها: `{p['weight']}%`" for p in sorted_prizes)
 
@@ -2066,11 +2025,6 @@ def build_luckybox_catalog_embed(guild: discord.Guild, buyer: discord.Member = N
 
 @bot.command(name="luckyinfo")
 async def luckyinfo_command(ctx: commands.Context, buyer: discord.Member = None):
-    """
-    الاستخدام:
-    +luckyinfo <@المشتري>  -> يرسل شرح مفصل بكل جوائز صندوق الحظ ونسبها، مع منشن المشتري
-    +luckyinfo              -> يرسل نفس الشرح بدون تخصيص لأحد
-    """
     try:
         await ctx.message.delete()
     except Exception:
@@ -2083,48 +2037,42 @@ async def luckyinfo_command(ctx: commands.Context, buyer: discord.Member = None)
         await ctx.send(embed=embed)
 
 
-@bot.command(name="luckyboard", aliases=["luckyleaderboard", "luckytop"])
-async def luckyboard_command(ctx: commands.Context):
+@bot.command(name="luckytop", aliases=["luckyboard", "luckyleaderboard"])
+async def luckytop_command(ctx: commands.Context, month: str = None):
     """
-    يعرض Leaderboard صندوق الحظ الخاص بالشهر الحالي: من حصل على أعلى/أندر جائزة.
-    الترتيب يعتمد أولاً على قيمة/ندرة أعلى جائزة حصل عليها العضو هذا الشهر، ثم عدد مرات فتحه للصندوق.
+    الاستخدام:
+    +luckytop            -> لوحة صدارة الشهر الحالي (أفضل جائزة حصل عليها كل عضو)
+    +luckytop 2026-07    -> لوحة صدارة شهر محدد بصيغة YYYY-MM
     """
-    month_key = current_month_key()
-    guild_data = luckybox_leaderboard.get(str(ctx.guild.id), {})
-    month_list = guild_data.get(month_key, [])
+    month_key = month.strip() if month else _current_month_key()
+    month_data = luckybox_stats.get(month_key, {})
 
-    if not month_list:
+    if not month_data:
         await ctx.reply(
-            embed=discord.Embed(description="📭 **لا توجد أي فتحات صندوق حظ مسجلة لهذا الشهر بعد.**", color=discord.Color.orange()),
+            embed=discord.Embed(description=f"📭 **لا توجد بيانات لصندوق الحظ في شهر `{month_key}` بعد.**", color=discord.Color.orange()),
             mention_author=False
         )
         return
 
-    best_per_user = {}
-    counts = {}
-    for entry in month_list:
-        uid = entry["user_id"]
-        counts[uid] = counts.get(uid, 0) + 1
-        if uid not in best_per_user or entry["rank"] > best_per_user[uid]["rank"]:
-            best_per_user[uid] = entry
-
-    ranking = sorted(best_per_user.values(), key=lambda e: (e["rank"], counts.get(e["user_id"], 0)), reverse=True)
-    ranking = ranking[:10]
+    ranked = sorted(
+        month_data.items(),
+        key=lambda kv: (kv[1].get("best_weight", 999), -kv[1].get("count", 0))
+    )[:10]
 
     medals = ["🥇", "🥈", "🥉"]
     lines = []
-    for i, entry in enumerate(ranking):
-        member = ctx.guild.get_member(entry["user_id"])
-        name = member.mention if member else f"`{entry['user_id']}`"
-        medal = medals[i] if i < 3 else f"`#{i + 1}`"
-        lines.append(f"{medal} {name} — 🏆 **{entry['prize']}** (عدد الفتحات هذا الشهر: `{counts.get(entry['user_id'], 0)}`)")
+    for i, (user_id, info) in enumerate(ranked):
+        rank_icon = medals[i] if i < len(medals) else f"`#{i + 1}`"
+        lines.append(
+            f"{rank_icon} <@{user_id}> — 🏆 **{info.get('best_prize', '—')}** | 🎁 عدد مرات الفوز: `{info.get('count', 0)}`"
+        )
 
     embed = discord.Embed(
-        title="🏆 Leaderboard صندوق الحظ - أعلى الجوائز هذا الشهر",
+        title=f"🏆 لوحة صدارة صندوق الحظ — {month_key}",
         description="\n".join(lines),
         color=discord.Color.gold()
     )
-    embed.set_footer(text=f"{ctx.guild.name} • الشهر: {month_key}", icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
+    embed.set_footer(text=f"{ctx.guild.name} • Axion Store", icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
     embed.timestamp = discord.utils.utcnow()
     await ctx.reply(embed=embed, mention_author=False)
 
@@ -2135,11 +2083,6 @@ async def luckyboard_command(ctx: commands.Context):
 
 @bot.command(name="say")
 async def say(ctx: commands.Context, *, message: str = None):
-    """
-    +say <نص>            -> يرسل نص فقط
-    +say (مع إرفاق صورة)  -> يرسل الصورة (مع نص اختياري)
-    يدمج هذا الأمر وظيفة +say-photo القديمة.
-    """
     try:
         await ctx.message.delete()
     except Exception:
@@ -2162,13 +2105,37 @@ async def say(ctx: commands.Context, *, message: str = None):
 
 
 @bot.command(name="say-embed")
-async def say_embed(ctx: commands.Context, *, message: str):
+async def say_embed(ctx: commands.Context, *, message: str = None):
+    """
+    +say-embed <نص>            -> يرسل إيمبد بالنص فقط
+    +say-embed <نص> (مع إرفاق صورة) -> يرسل الإيمبد مع الصورة داخل الإيمبد نفسه
+    """
     try:
         await ctx.message.delete()
     except Exception:
         pass
 
-    await ctx.send(embed=discord.Embed(description=message, color=EMBED_COLOR))
+    if not message:
+        await ctx.reply(
+            embed=discord.Embed(description="⚠️ **يجب كتابة نص الرسالة.**", color=discord.Color.orange()),
+            mention_author=False, delete_after=6
+        )
+        return
+
+    embed = discord.Embed(description=message, color=EMBED_COLOR)
+
+    image_file = None
+    for attachment in ctx.message.attachments:
+        if attachment.content_type and attachment.content_type.startswith("image/"):
+            img_bytes = await attachment.read()
+            image_file = discord.File(io.BytesIO(img_bytes), filename=attachment.filename)
+            embed.set_image(url=f"attachment://{attachment.filename}")
+            break
+
+    if image_file:
+        await ctx.send(embed=embed, file=image_file)
+    else:
+        await ctx.send(embed=embed)
 
 
 # =========================================================
