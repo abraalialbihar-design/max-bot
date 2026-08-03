@@ -131,6 +131,58 @@ def is_ticket_channel(channel) -> bool:
 
 
 # =========================================================
+# ============= بيانات استلام التذاكر (Claim) =============
+# =========================================================
+def get_ticket_meta(channel) -> dict:
+    """يقرأ بيانات التذكرة (صاحبها، آيدي رسالة التحكم، من قام باستلامها) من موضوع (topic) القناة."""
+    topic = getattr(channel, "topic", None) or ""
+    meta = {"opener": None, "msg": None, "claimed": None}
+    for part in topic.split(";"):
+        if ":" not in part:
+            continue
+        key, _, value = part.partition(":")
+        value = value.strip()
+        if key == "opener" and value.isdigit() and int(value) != 0:
+            meta["opener"] = int(value)
+        elif key == "msg" and value.isdigit() and int(value) != 0:
+            meta["msg"] = int(value)
+        elif key == "claimed" and value.isdigit() and int(value) != 0:
+            meta["claimed"] = int(value)
+    return meta
+
+
+def build_ticket_topic(opener_id: int = None, msg_id: int = None, claimed_id: int = None) -> str:
+    return f"opener:{opener_id or 0};msg:{msg_id or 0};claimed:{claimed_id or 0}"
+
+
+async def update_ticket_claim_status(channel: discord.TextChannel, msg_id: int, claimer: discord.abc.User):
+    """يعدل رسالة التذكرة الأساسية ليظهر بها اسم من قام باستلامها ويعطل زر الاستلام."""
+    if not msg_id:
+        return
+    try:
+        ticket_message = await channel.fetch_message(msg_id)
+    except Exception:
+        return
+
+    if not ticket_message.embeds:
+        return
+
+    embed = ticket_message.embeds[0]
+    embed.add_field(name="🙋‍♂️ مستلمة من", value=claimer.mention, inline=False)
+
+    new_view = TicketControlView()
+    for child in new_view.children:
+        if isinstance(child, discord.ui.Button) and child.custom_id == "claim_ticket_btn":
+            child.disabled = True
+            child.label = "تم الاستلام ✅"
+
+    try:
+        await ticket_message.edit(embed=embed, view=new_view)
+    except Exception as e:
+        print(f"⚠️ تعذر تعديل رسالة التذكرة بعد الاستلام: {e}")
+
+
+# =========================================================
 # ============= تخزين آمن (بدون فقدان بيانات) =============
 # =========================================================
 def _atomic_write_json(path: str, data: dict):
@@ -533,11 +585,33 @@ class TicketControlView(discord.ui.View):
 
     @discord.ui.button(label="استلام التذكرة (Claim)", emoji="🙋‍♂️", style=discord.ButtonStyle.secondary, custom_id="claim_ticket_btn")
     async def claim_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        channel = interaction.channel
+        meta = get_ticket_meta(channel)
+
+        if meta["opener"] and interaction.user.id == meta["opener"]:
+            await interaction.response.send_message(
+                "❌ **لا يمكنك استلام تذكرتك الخاصة.**", ephemeral=True
+            )
+            return
+
+        if meta["claimed"]:
+            await interaction.response.send_message(
+                f"⚠️ **هذه التذكرة مستلمة بالفعل من <@{meta['claimed']}>.**", ephemeral=True
+            )
+            return
+
+        try:
+            await channel.edit(topic=build_ticket_topic(meta["opener"], meta["msg"], interaction.user.id))
+        except Exception:
+            pass
+
         embed = discord.Embed(
             description=f"✅ **تم استلام التذكرة بواسطة {interaction.user.mention}**\nسيقوم بمتابعة طلبك الآن.",
             color=discord.Color.green()
         )
         await interaction.response.send_message(embed=embed)
+
+        await update_ticket_claim_status(channel, meta["msg"], interaction.user)
 
 
 async def create_service_ticket(interaction: discord.Interaction, category: dict, extra_info: str = None):
@@ -587,7 +661,8 @@ async def create_service_ticket(interaction: discord.Interaction, category: dict
         ticket_channel = await guild.create_text_channel(
             name=channel_name,
             category=ticket_category,
-            overwrites=overwrites
+            overwrites=overwrites,
+            topic=build_ticket_topic(member.id)
         )
     except discord.HTTPException as e:
         error_embed = discord.Embed(
@@ -627,7 +702,12 @@ async def create_service_ticket(interaction: discord.Interaction, category: dict
     embed.timestamp = discord.utils.utcnow()
 
     mention_content = f"{member.mention} <@&{BUY_ROLE_ID}>"
-    await ticket_channel.send(content=mention_content, embed=embed, view=TicketControlView())
+    ticket_message = await ticket_channel.send(content=mention_content, embed=embed, view=TicketControlView())
+
+    try:
+        await ticket_channel.edit(topic=build_ticket_topic(member.id, ticket_message.id))
+    except Exception:
+        pass
 
     if config.get("away_mode"):
         reason = config.get("away_reason") or "غير محدد"
@@ -977,6 +1057,21 @@ async def claim_cmd(ctx: commands.Context):
     try: await ctx.message.delete()
     except Exception: pass
 
+    meta = get_ticket_meta(ctx.channel)
+
+    if meta["opener"] and ctx.author.id == meta["opener"]:
+        await ctx.send(embed=discord.Embed(description="❌ **لا يمكنك استلام تذكرتك الخاصة.**", color=discord.Color.red()), delete_after=6)
+        return
+
+    if meta["claimed"]:
+        await ctx.send(embed=discord.Embed(description=f"⚠️ **هذه التذكرة مستلمة بالفعل من <@{meta['claimed']}>.**", color=discord.Color.orange()), delete_after=6)
+        return
+
+    try:
+        await ctx.channel.edit(topic=build_ticket_topic(meta["opener"], meta["msg"], ctx.author.id))
+    except Exception:
+        pass
+
     embed = discord.Embed(
         title="🙋‍♂️ تم استلام التذكرة",
         description=f"**بواسطة:** {ctx.author.mention}\nسيقوم بمتابعة طلبك الآن.",
@@ -985,6 +1080,8 @@ async def claim_cmd(ctx: commands.Context):
     embed.set_footer(text=f"{ctx.guild.name} • Axion Store", icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
     embed.timestamp = discord.utils.utcnow()
     await ctx.send(embed=embed)
+
+    await update_ticket_claim_status(ctx.channel, meta["msg"], ctx.author)
 
 
 @bot.command(name="d")
@@ -1336,7 +1433,7 @@ async def help_command(ctx: commands.Context):
         value=(
             "`+panel` • إرسال لوحة فتح التذاكر (أزرار)\n"
             "`+dpanel` • إرسال لوحة فتح التذاكر (قائمة اختيار Dropdown)\n"
-            "`+claim` • استلام التذكرة الحالية\n"
+            "`+claim` • استلام التذكرة الحالية (لا يمكن لصاحب التذكرة أو أكثر من شخص استلامها)\n"
             "`+close` • إغلاق التذكرة الحالية (يتطلب تأكيد + يحفظ لوق كامل)\n"
             "`+kl` • تحذير بالإغلاق التلقائي\n"
             "`+addto <@عضو>` • إضافة عضو للتذكرة الحالية\n"
