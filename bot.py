@@ -53,7 +53,8 @@ AXION_TERMS = (
     "**1️⃣ -** يمنع طلب استبدال السلعة او استرداد الاموال بعد شرائك شي من المتجر ويجب أن تكون متأكدا قبل شرائك.\n\n"
     "**2️⃣ -** لا يحق للعميل طلب تخفيض سعر او شيء مجاني من المتجر.\n\n"
     "**3️⃣ -** يحق للعميل شراء هدية لشخص من منتجات المتجر.\n\n"
-    "**4️⃣ -** جميع المشتريات تكون من خلال التذاكر المخصصة للمتجر فقط لا غير."
+    "**4️⃣ -** جميع المشتريات تكون من خلال التذاكر المخصصة للمتجر فقط لا غير.\n\n"
+    "**5️⃣ -** يجب على العميل دفع المبلغ المطلوب بالكامل أولاً، ولن يتم تسليم أي منتج أو خدمة قبل تأكيد استلام الدفع."
 )
 
 # =========================================================
@@ -64,56 +65,67 @@ TICKET_CATEGORIES = [
         "key": "inquiry", "label": "استفسار على منتج",
         "emoji": "<:Support:1532171575653302397>", "prefix": "INQUIRY", "needs_username": False,
         "desc": "لو تبي تستفسر عن اي شيء يخص المتجر او يخص منتج يمكنك الضغط على زر إستفسار على منتج",
+        "role_id": None,
     },
     {
         "key": "fivem", "label": "Fivem",
         "emoji": "<:FIVEM:1530421877443530863>", "prefix": "FIVEM", "needs_username": False,
         "desc": "لو تبي تشتري حساب فايف ام او اي شيء ليه علاقة به اضغط علي",
+        "role_id": 1533983548690665552,
     },
     {
         "key": "discord", "label": "Discord",
         "emoji": "<a:AT_Discord:1532164241270902854>", "prefix": "DISCORD", "needs_username": False,
         "desc": "لو تبي تشتري اي شيء يتعلق بالديسكورد من نيترو، بوستات، افكتات، او هايب سكواد اضغط علي",
+        "role_id": 1533983503493107772,
     },
     {
         "key": "robux", "label": "Robux",
         "emoji": "<:Robux:1530419657209548841>", "prefix": "ROBUX", "needs_username": True,
         "desc": "لو تبي تشتري او تستفسر عن اي شيء يخص حساب او منتجات روبوكس اضغط علي",
+        "role_id": 1533983445489942650,
     },
     {
         "key": "credit", "label": "Credit",
         "emoji": "<:Pro:1530379178635952200>", "prefix": "CREDIT", "needs_username": False,
         "desc": "لو تبي تشتري كريدت او رصيد اضغط علي",
+        "role_id": 1533983379903611021,
     },
     {
         "key": "hosting", "label": "Hosting",
         "emoji": "<:OX_HOST:1532158984734375986>", "prefix": "HOST", "needs_username": False,
         "desc": "لو تبي تشتري استضافة او تستفسر عنها اضغط علي",
+        "role_id": 1533983312811397232,
     },
     {
         "key": "snapchat", "label": "Snapchat",
         "emoji": "<:5378_snapchat:1532159134382686288>", "prefix": "SNAP", "needs_username": False,
         "desc": "لو تبي تشتري حساب سناب شات او اي شيء يخصه اضغط علي",
+        "role_id": 1533983265793511475,
     },
     {
         "key": "dev", "label": "Dev",
         "emoji": "<:dev:1530379905148260542>", "prefix": "DEV", "needs_username": False,
         "desc": "لو تبي تطلب خدمة برمجة او بوت مخصص اضغط علي",
+        "role_id": 1533983193538101428,
     },
     {
         "key": "windows", "label": "Windows",
         "emoji": "<:windows10100:1532163510753165443>", "prefix": "WINDOWS", "needs_username": False,
         "desc": "لو تبي تفعل نسخة ويندوز اضغط علي",
+        "role_id": 1533982992471556096,
     },
     {
         "key": "visa", "label": "Visa",
         "emoji": "<:81603:1530379444584317091>", "prefix": "VISA", "needs_username": False,
         "desc": "لو تبي تشتري فيزا افتراضية او تستفسر عنها اضغط علي",
+        "role_id": 1533983109454889133,
     },
     {
         "key": "luckybox", "label": "صندوق الحظ",
         "emoji": "<:834134giftingchampion:1532876102106742814>", "prefix": "LUCKY", "needs_username": False,
         "desc": "لو تبي تشتري صندوق حظ او تستفسر عن جوائزه اضغط علي",
+        "role_id": None,
     },
 ]
 TICKET_PREFIXES = tuple(f"{c['prefix'].lower()}-" for c in TICKET_CATEGORIES)
@@ -643,6 +655,12 @@ async def create_service_ticket(interaction: discord.Interaction, category: dict
         if role.permissions.administrator or role.id == BUY_ROLE_ID:
             overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
 
+    # رتبة القسم المخصصة: فقط أصحابها يشوفون هذا النوع من التذاكر ويقدرون يبيعون فيها
+    category_role_id = category.get("role_id")
+    category_role = guild.get_role(category_role_id) if category_role_id else None
+    if category_role:
+        overwrites[category_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+
     cat_id = config.get("buy_category_id")
     ticket_category = guild.get_channel(cat_id) if cat_id else None
 
@@ -701,7 +719,8 @@ async def create_service_ticket(interaction: discord.Interaction, category: dict
     embed.set_footer(text=f"{guild.name} • Axion Store", icon_url=guild.icon.url if guild.icon else None)
     embed.timestamp = discord.utils.utcnow()
 
-    mention_content = f"{member.mention} <@&{BUY_ROLE_ID}>"
+    role_mention = f"<@&{category_role.id}>" if category_role else f"<@&{BUY_ROLE_ID}>"
+    mention_content = f"{member.mention} {role_mention}"
     ticket_message = await ticket_channel.send(content=mention_content, embed=embed, view=TicketControlView())
 
     try:
