@@ -37,6 +37,9 @@ BUY_ROLE_ID = 1530380477377024200
 TICKET_NOTIFY_USER_ID = 1426552057984454817
 TICKET_LOG_CHANNEL_ID = 1532468240985362682
 
+# قناة استلام نتائج التقديم للانضمام كبائع
+APPLY_LOG_CHANNEL_ID = 1533987267071180810
+
 STAR_EMOJI = "⭐"
 EMBED_COLOR = discord.Color.from_rgb(47, 49, 54)
 TICKET_EMBED_COLOR = discord.Color.blue()
@@ -128,7 +131,15 @@ TICKET_CATEGORIES = [
         "role_id": None,
     },
 ]
-TICKET_PREFIXES = tuple(f"{c['prefix'].lower()}-" for c in TICKET_CATEGORIES)
+
+# قسم خاص بتذاكر التقديم للانضمام كبائع (لا يظهر كزر في لوحة +panel/+dpanel، يُفتح تلقائياً بعد التقديم)
+APPLY_TICKET_CATEGORY = {
+    "key": "apply", "label": "تقديم بائع",
+    "emoji": "📝", "prefix": "APPLY", "needs_username": False,
+    "role_id": None,
+}
+
+TICKET_PREFIXES = tuple(f"{c['prefix'].lower()}-" for c in TICKET_CATEGORIES) + (f"{APPLY_TICKET_CATEGORY['prefix'].lower()}-",)
 TICKET_CATEGORY_BY_KEY = {c["key"]: c for c in TICKET_CATEGORIES}
 
 processing_messages = set()
@@ -840,6 +851,148 @@ class TicketSelectView(discord.ui.View):
 
 
 # =========================================================
+# ============= نظام التقديم للانضمام كبائع: +applys ========
+# =========================================================
+# ديسكورد يسمح بحد أقصى 5 حقول لكل Modal، ولدينا 7 أسئلة،
+# لذلك تم تقسيمها على مودالين متتاليين (5 ثم 2) بضغطة زر بينهم.
+
+APPLY_QUESTIONS = [
+    "عرف بنفسك ولماذا ترغب في الانضمام كبائع منتجات رقمية؟",
+    "هل لديك خبرة سابقة في البيع؟ اذكرها باختصار.",
+    "كيف تتعامل مع عميل غير راضٍ عن المنتج؟",
+    "إذا كان هناك أكثر من عميل ينتظر الرد، كيف تنظم عملك؟",
+    "كم ساعة يمكنك التواجد يوميًا لخدمة العملاء وإتمام المبيعات؟",
+    "لماذا نختارك أنت بدلًا من باقي المتقدمين؟",
+    "كم لديك فيدباك؟",
+]
+
+
+def build_apply_extra_info(answers: dict) -> str:
+    lines = ["📋 **إجابات نموذج التقديم كبائع:**"]
+    for i, question in enumerate(APPLY_QUESTIONS, start=1):
+        lines.append(f"\n**{i}. {question}**\n{answers.get(str(i), '—')}")
+    return "\n".join(lines)
+
+
+async def send_apply_report(interaction: discord.Interaction, answers: dict):
+    log_channel = interaction.client.get_channel(APPLY_LOG_CHANNEL_ID)
+    if log_channel is None:
+        print("⚠️ لم يتم العثور على قناة نتائج التقديم المحددة.")
+        return
+
+    embed = discord.Embed(
+        title="📝 طلب تقديم جديد للانضمام كبائع",
+        description=f"👤 **المتقدم:** {interaction.user.mention} `({interaction.user.id})`",
+        color=discord.Color.blurple()
+    )
+    for i, question in enumerate(APPLY_QUESTIONS, start=1):
+        embed.add_field(name=f"{i}. {question}", value=(answers.get(str(i), "—") or "—")[:1024], inline=False)
+    embed.set_thumbnail(url=interaction.user.display_avatar.url)
+    embed.set_footer(
+        text=f"{interaction.guild.name} • Axion Store Recruitment",
+        icon_url=interaction.guild.icon.url if interaction.guild.icon else None
+    )
+    embed.timestamp = discord.utils.utcnow()
+
+    try:
+        await log_channel.send(embed=embed)
+    except Exception as e:
+        print(f"⚠️ تعذر إرسال تقرير التقديم: {e}")
+
+
+class ApplyModalPart2(discord.ui.Modal, title="نموذج التقديم كبائع (2/2)"):
+    q6 = discord.ui.TextInput(
+        label="لماذا نختارك أنت بدلًا من باقي المتقدمين؟",
+        style=discord.TextStyle.paragraph, required=True, max_length=400
+    )
+    q7 = discord.ui.TextInput(
+        label="كم لديك فيدباك؟",
+        required=True, max_length=100
+    )
+
+    def __init__(self, part1_answers: dict):
+        super().__init__()
+        self.part1_answers = part1_answers
+
+    async def on_submit(self, interaction: discord.Interaction):
+        answers = dict(self.part1_answers)
+        answers["6"] = self.q6.value.strip()
+        answers["7"] = self.q7.value.strip()
+
+        await send_apply_report(interaction, answers)
+
+        extra_info = build_apply_extra_info(answers)
+        await create_service_ticket(interaction, APPLY_TICKET_CATEGORY, extra_info=extra_info)
+
+
+class ApplyContinueView(discord.ui.View):
+    def __init__(self, part1_answers: dict):
+        super().__init__(timeout=300)
+        self.part1_answers = part1_answers
+
+    @discord.ui.button(label="متابعة التقديم ➡️", style=discord.ButtonStyle.primary)
+    async def continue_apply(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(ApplyModalPart2(self.part1_answers))
+        for child in self.children:
+            child.disabled = True
+        try:
+            await interaction.message.edit(view=self)
+        except Exception:
+            pass
+        self.stop()
+
+
+class ApplyModalPart1(discord.ui.Modal, title="نموذج التقديم كبائع (1/2)"):
+    q1 = discord.ui.TextInput(
+        label="عرف بنفسك ولماذا ترغب بالانضمام؟",
+        style=discord.TextStyle.paragraph, required=True, max_length=500
+    )
+    q2 = discord.ui.TextInput(
+        label="هل لديك خبرة سابقة في البيع؟",
+        style=discord.TextStyle.paragraph, required=True, max_length=300
+    )
+    q3 = discord.ui.TextInput(
+        label="كيف تتعامل مع عميل غير راضٍ؟",
+        style=discord.TextStyle.paragraph, required=True, max_length=300
+    )
+    q4 = discord.ui.TextInput(
+        label="كيف تنظم عملك مع أكثر من عميل؟",
+        style=discord.TextStyle.paragraph, required=True, max_length=300
+    )
+    q5 = discord.ui.TextInput(
+        label="كم ساعة تقدر تتواجد يوميًا؟",
+        required=True, max_length=100
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        answers = {
+            "1": self.q1.value.strip(),
+            "2": self.q2.value.strip(),
+            "3": self.q3.value.strip(),
+            "4": self.q4.value.strip(),
+            "5": self.q5.value.strip(),
+        }
+        view = ApplyContinueView(answers)
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                description="✅ **تم حفظ إجاباتك على الجزء الأول.**\nاضغط الزر بالأسفل لإكمال باقي الأسئلة (سؤالين فقط).",
+                color=discord.Color.green()
+            ),
+            view=view,
+            ephemeral=True
+        )
+
+
+class ApplyStartView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="قدم الآن", emoji="📝", style=discord.ButtonStyle.success, custom_id="start_apply_btn")
+    async def start_apply(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(ApplyModalPart1())
+
+
+# =========================================================
 # ===================== البوت الرئيسي =====================
 # =========================================================
 
@@ -856,6 +1009,7 @@ class CustomBot(commands.Bot):
         self.add_view(TicketSetupView())
         self.add_view(TicketSelectView())
         self.add_view(TicketControlView())
+        self.add_view(ApplyStartView())
 
 bot = CustomBot()
 
@@ -864,7 +1018,7 @@ bot = CustomBot()
 async def restrict_to_admin(ctx: commands.Context):
     if ctx.guild is None:
         return False
-    if ctx.command and ctx.command.name in ("close", "claim"):
+    if ctx.command and ctx.command.name in ("close", "claim", "applys"):
         return True
     return ctx.author.guild_permissions.administrator
 
@@ -1065,6 +1219,25 @@ async def terms_command(ctx: commands.Context):
     )
     embed.set_footer(text=f"{ctx.guild.name} • Axion Store", icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
     await ctx.send(embed=embed)
+
+
+@bot.command(name="applys")
+async def applys_command(ctx: commands.Context):
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+
+    embed = discord.Embed(
+        title="📝 التقديم للانضمام كبائع - 𝐀𝐱𝐢𝐨𝐧 𝐒𝐭𝐨𝐫𝐞",
+        description=(
+            "هل ترغب بالانضمام لفريق البائعين لدينا؟\n\n"
+            "اضغط على الزر بالأسفل ⬇️ وجاوب على أسئلة التقديم بصدق، وسيتم مراجعة طلبك من قبل الإدارة."
+        ),
+        color=EMBED_COLOR
+    )
+    embed.set_footer(text=f"{ctx.guild.name} • Axion Store", icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
+    await ctx.send(embed=embed, view=ApplyStartView())
 
 
 @bot.command(name="claim")
@@ -1458,6 +1631,7 @@ async def help_command(ctx: commands.Context):
             "`+addto <@عضو>` • إضافة عضو للتذكرة الحالية\n"
             "`+removeto <@عضو>` • إزالة عضو من التذكرة الحالية\n"
             "`+terms` • عرض قوانين المتجر\n"
+            "`+applys` • إرسال لوحة التقديم للانضمام كبائع (نموذج أسئلة + فتح تذكرة تلقائي)\n"
             "`+bnm <ID>` • تعيين كاتيجوري التذاكر\n"
             "`+setpay` • إعداد وتحديث طرق الدفع\n"
             "`+pay` • عرض طرق الدفع الحالية (مع أزرار نسخ سريعة)\n"
