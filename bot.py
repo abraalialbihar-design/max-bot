@@ -1892,7 +1892,7 @@ TICKET_PANEL_DESCRIPTION = (
 TICKET_PANEL_COLOR = TICKET_EMBED_COLOR
 TICKET_PANEL_FOOTER = "Axion Store • DEV BY : @D0JW"
 # رابط الصورة الافتراضي الذي يظهر أسفل الإيمبد إن لم يتم إرفاق صورة مع الأمر
-TICKET_PANEL_DEFAULT_IMAGE_URL = "https://media.discordapp.net/attachments/1531472586746106017/1533472397447925812/image.png?ex=6a709cf6&is=6a6f4b76&hm=986ebc9526d5e5c1a0d93870c9e32e148d5cf4f3a702bd87c5969601f69c1d67&=&format=webp&quality=lossless&width=1139&height=385"
+TICKET_PANEL_DEFAULT_IMAGE_URL = "https://media.discordapp.net/attachments/1526248189731016735/1534244119361224815/standard_24.gif?ex=6a736bae&is=6a721a2e&hm=721ec19c5e4e6401aa30968e3037562591cbcf17e0b871329b7fe181a5cfc77d&="
 
 
 @bot.command(name="panel")
