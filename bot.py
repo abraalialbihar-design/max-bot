@@ -1593,6 +1593,67 @@ async def give_customer_role(ctx: commands.Context, member: discord.Member):
         await ctx.send(embed=discord.Embed(description=f"❌ **حدث خطأ:** {e}", color=discord.Color.red()))
 
 
+# =========================================================
+# ============ حاسبة ضريبة الروبوكس: +robtax ============
+# =========================================================
+# روبلوكس يأخذ نسبة 30% عند تحويل الروبوكس بين الحسابات.
+# +robtax <رقم>   -> يحسب المبلغ الواجب إرساله حتى يصل المستلم للرقم المطلوب "بعد" خصم الـ30%
+#                     (المعادلة: المبلغ ÷ 0.70)
+# +robtax -<رقم>  -> يحسب المبلغ "المتبقي" بعد خصم الـ30% من رقم معيّن أرسلته
+#                     (المعادلة: المبلغ × 0.70)
+ROBUX_TAX_RATE = 0.30
+
+
+@bot.command(name="robtax")
+async def robtax_command(ctx: commands.Context, *, amount_text: str):
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+
+    text = amount_text.strip()
+    is_reverse = text.startswith("-")
+    if is_reverse:
+        text = text[1:].strip()
+
+    amount = parse_amount(text)
+    if amount is None:
+        await ctx.send(
+            embed=discord.Embed(
+                description=(
+                    "⚠️ **الرجاء كتابة رقم صحيح.**\n"
+                    "مثال: `+robtax 1000` لمعرفة المبلغ الواجب إرساله ليصل بعد الضريبة\n"
+                    "أو: `+robtax -1000` لمعرفة المتبقي بعد خصم ضريبة الـ30%"
+                ),
+                color=discord.Color.orange()
+            ),
+            delete_after=10
+        )
+        return
+
+    if is_reverse:
+        result = math.floor(amount * (1 - ROBUX_TAX_RATE))
+        embed = discord.Embed(
+            description=(
+                f"💸 **المبلغ بعد خصم ضريبة الروبوكس (30%):**\n"
+                f"### `{result:,}`"
+            ),
+            color=EMBED_COLOR
+        )
+    else:
+        result = math.ceil(amount / (1 - ROBUX_TAX_RATE))
+        embed = discord.Embed(
+            description=(
+                f"💰 **يجب إرسال المبلغ التالي ليصل المستلم `{amount:,.0f}` بعد خصم الضريبة (30%):**\n"
+                f"### `{result:,}`"
+            ),
+            color=EMBED_COLOR
+        )
+
+    embed.set_footer(text=f"{ctx.guild.name} • Axion Store", icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
+    await ctx.reply(embed=embed, mention_author=False)
+
+
 @bot.command(name="help")
 async def help_command(ctx: commands.Context):
     embed = discord.Embed(
@@ -1636,6 +1697,7 @@ async def help_command(ctx: commands.Context):
             "`+setpay` • إعداد وتحديث طرق الدفع\n"
             "`+pay` • عرض طرق الدفع الحالية (مع أزرار نسخ سريعة)\n"
             "`+tax [ID]` • تعيين روم حساب الضريبة\n"
+            "`+robtax <رقم>` • حساب ضريبة تحويل الروبوكس (30%) — اكتب `+robtax -رقم` لحساب المتبقي بعد الخصم\n"
             "`+auto-setup <ID> <إيموجي>` • تفعيل ريأكشن تلقائي على قناة معينة\n"
             "`+rate <@المشتري> <المنتج>` • طلب تقييم من المشتري\n"
             "`+rate-setup <ID>` • تعيين روم التقييمات\n"
