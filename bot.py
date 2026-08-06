@@ -1605,53 +1605,78 @@ ROBUX_TAX_RATE = 0.30
 
 
 @bot.command(name="robtax")
-async def robtax_command(ctx: commands.Context, *, amount_text: str):
+async def robtax_command(ctx: commands.Context, *, amount_text: str = None):
     try:
         await ctx.message.delete()
     except Exception:
         pass
 
-    text = amount_text.strip()
-    is_reverse = text.startswith("-")
-    if is_reverse:
-        text = text[1:].strip()
-
-    amount = parse_amount(text)
-    if amount is None:
-        await ctx.send(
-            embed=discord.Embed(
-                description=(
-                    "⚠️ **الرجاء كتابة رقم صحيح.**\n"
-                    "مثال: `+robtax 1000` لمعرفة المبلغ الواجب إرساله ليصل بعد الضريبة\n"
-                    "أو: `+robtax -1000` لمعرفة المتبقي بعد خصم ضريبة الـ30%"
+    try:
+        if not amount_text or not amount_text.strip():
+            await ctx.send(
+                embed=discord.Embed(
+                    description=(
+                        "⚠️ **يجب كتابة رقم بعد الأمر.**\n"
+                        "مثال: `+robtax 1000` أو `+robtax -1000`"
+                    ),
+                    color=discord.Color.orange()
                 ),
-                color=discord.Color.orange()
-            ),
-            delete_after=10
-        )
-        return
+                delete_after=10
+            )
+            return
 
-    if is_reverse:
-        result = math.floor(amount * (1 - ROBUX_TAX_RATE))
-        embed = discord.Embed(
-            description=(
-                f"💸 **المبلغ بعد خصم ضريبة الروبوكس (30%):**\n"
-                f"### `{result:,}`"
-            ),
-            color=EMBED_COLOR
-        )
-    else:
-        result = math.ceil(amount / (1 - ROBUX_TAX_RATE))
-        embed = discord.Embed(
-            description=(
-                f"💰 **يجب إرسال المبلغ التالي ليصل المستلم `{amount:,.0f}` بعد خصم الضريبة (30%):**\n"
-                f"### `{result:,}`"
-            ),
-            color=EMBED_COLOR
-        )
+        text = amount_text.strip()
+        is_reverse = text.startswith("-")
+        if is_reverse:
+            text = text[1:].strip()
 
-    embed.set_footer(text=f"{ctx.guild.name} • Axion Store", icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
-    await ctx.reply(embed=embed, mention_author=False)
+        amount = parse_amount(text)
+        if amount is None:
+            await ctx.send(
+                embed=discord.Embed(
+                    description=(
+                        "⚠️ **الرجاء كتابة رقم صحيح.**\n"
+                        "مثال: `+robtax 1000` لمعرفة المبلغ الواجب إرساله ليصل بعد الضريبة\n"
+                        "أو: `+robtax -1000` لمعرفة المتبقي بعد خصم ضريبة الـ30%"
+                    ),
+                    color=discord.Color.orange()
+                ),
+                delete_after=10
+            )
+            return
+
+        if is_reverse:
+            result = math.floor(amount * (1 - ROBUX_TAX_RATE))
+            embed = discord.Embed(
+                description=(
+                    f"💸 **المبلغ بعد خصم ضريبة الروبوكس (30%):**\n"
+                    f"### `{result:,}`"
+                ),
+                color=EMBED_COLOR
+            )
+        else:
+            result = math.ceil(amount / (1 - ROBUX_TAX_RATE))
+            embed = discord.Embed(
+                description=(
+                    f"💰 **يجب إرسال المبلغ التالي ليصل المستلم `{amount:,.0f}` بعد خصم الضريبة (30%):**\n"
+                    f"### `{result:,}`"
+                ),
+                color=EMBED_COLOR
+            )
+
+        embed.set_footer(text=f"{ctx.guild.name} • Axion Store", icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
+        await ctx.send(embed=embed)
+    except Exception as e:
+        print(f"❌ خطأ في أمر robtax: {e}")
+        try:
+            await ctx.send(
+                embed=discord.Embed(
+                    description=f"❌ **حدث خطأ أثناء تنفيذ الأمر:**\n```{e}```",
+                    color=discord.Color.red()
+                )
+            )
+        except Exception:
+            pass
 
 
 @bot.command(name="help")
